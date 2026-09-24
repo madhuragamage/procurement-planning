@@ -21,12 +21,16 @@ Development without Docker: run MySQL locally with `server/sql/schema.sql`, then
 `server/` (needs the `DB_*`, `JWT_SECRET`, `FRONTEND_ORIGIN` env vars) and `npm run dev` in `client/`
 (proxies `/api` to port 4000).
 
-Rule unit tests: `cd server && npm test`.
+Rule and progress unit tests: `cd server && npm test`.
+
+Database: `server/sql/schema.sql` is the version-1 baseline; the server applies the numbered migrations in
+`server/src/migrations/` at start-up (tracked in `schema_migrations`), so existing databases upgrade in place.
 
 ## Workflow
 
-1. **Request** – a department user creates a request (category, cost excl./incl. VAT, funding, required
-   date, plan cycle and year) and submits it.
+1. **Request** – a department user or a **sub unit** creates a request (category, **reason** ROL / Replacement / New /
+   Other, cost excl./incl. VAT, **funding** LECO (default) / GOSL / Foreign / Grant, required date, plan cycle and
+   year) and submits it. Each sub unit files independently and sees only its own requests.
 2. **Authorise** – the department head authorises, returns (with comment) or rejects it.
 3. **Procurement inbox** – the procurement unit assigns method, bidding procedure, prequalification,
    committee level, procurement start and expected delivery. Live checks against the Manual appear as
@@ -37,14 +41,23 @@ Rule unit tests: `cd server && npm test`.
 5. **Revisions** – a frozen plan can only change through a bi-annual or urgent revision (add / modify /
    cancel). Management approval applies the changes atomically, bumps the plan version and stores a
    snapshot. Direct edits to a submitted/approved/frozen plan are rejected with HTTP 409.
-6. **Execution** – the procurement unit records revised and actual milestone dates, supplier and award
-   value. Overdue milestones surface on the dashboard.
+6. **Execution** – once a plan is approved, its department users can view their own unit's items. When an item's
+   planned start date is within the reminder lead time (default 30 days, Admin → Limits) the department is
+   reminded on its dashboard and sends an **execution request**. Only the procurement unit accepts it (or returns
+   it with a comment) and records revised/actual milestone dates, supplier and award value. Progress cannot be
+   recorded before a request is accepted.
 7. **Reports** – MPP (Annex I), APPP (Annex II), DAPP (Annex III, Schedule/Revised/Actual rows),
    Preparatory plan (Annex VI), category-wise, department × category, method and committee summaries,
    budget availability and the **Quarterly Procurement Performance Report**. Each has "Print / save as
    PDF" (browser print) and CSV download.
 
-Roles: `admin`, `requester` (department user), `dept_head`, `procurement`, `management`.
+Dashboard and the **Board / CEO** page show plan progress: actual = share of the 13 Annex III milestones with an
+actual date (value-weighted), against the share the schedule expects by today, by division/department.
+
+Roles: `admin`, `requester` (department or sub-unit user), `dept_head` (authorises for the department and its sub
+units), `procurement`, `management`, `executive` (Board/CEO, read-only).
+
+Organisation: Division → Department → Sub unit (Admin → Divisions, departments & sub units).
 
 ## Rules encoded (`server/src/rules.js`)
 
@@ -66,5 +79,7 @@ Annex VIII/IX are used in warnings, the Preparatory-plan selection rule (procure
 
 - Financial year = calendar year. A "plan cycle" is a base year plus the two following tentative years.
 - Budget year of an item = cycle + year offset; availability = allocation − plan items (incl. VAT).
-- Not included: notifications, e-signatures, attachments, consolidation across companies for the
+- Funding classes for the limits: LECO and GOSL use the GOSL tables; Foreign and Grant use the foreign-funded tables.
+- Reminders are in-app (dashboard, plan page); there is no e-mail/SMS.
+- Not included: e-mail notifications, e-signatures, attachments, consolidation across companies for the
   ministry, Chapters 5–8 (bidding documents, evaluation, contract management).

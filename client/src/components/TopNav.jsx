@@ -8,11 +8,12 @@ import { FySelect } from './ui.jsx';
 // [path, label, roles allowed to see the tab (null = everyone)]
 const TABS = [
   ['dashboard', 'Dashboard', null],
+  ['board', 'Board / CEO', ['executive', 'management', 'admin', 'procurement']],
   ['requests', 'Requests', ['requester', 'dept_head', 'procurement', 'admin']],
   ['authorisations', 'Authorise', ['dept_head', 'admin']],
   ['inbox', 'Procurement inbox', ['procurement', 'admin']],
   ['plan', 'Plan', null],
-  ['revisions', 'Revisions', ['procurement', 'management', 'admin']],
+  ['revisions', 'Revisions', ['procurement', 'management', 'admin', 'executive']],
   ['execution', 'Execution', null],
   ['budgets', 'Budgets', null],
   ['reports', 'Reports', null],
@@ -45,7 +46,7 @@ export default function TopNav() {
         <FySelect fy={fy} setFy={setFy} />
         <button className="iconbtn" onClick={toggleTheme}>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</button>
         <span style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'right' }}>
-          {user.name}<br />{ROLE_LABEL[user.role]}{user.department ? ' · ' + user.department : ''}
+          {user.name}<br />{ROLE_LABEL[user.role]}{user.department ? ' · ' + user.department : ''}{user.sub_unit ? ' / ' + user.sub_unit : ''}
         </span>
         <button className="iconbtn" onClick={logout}>Sign out</button>
       </div>

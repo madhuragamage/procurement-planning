@@ -58,3 +58,25 @@ export function FySelect({ fy, setFy }) {
     </label>
   );
 }
+
+// Progress bar: fill = actual %, tick = expected % by schedule. Red when behind, green when ahead.
+export function ProgressBar({ actual, expected }) {
+  const a = Math.max(0, Math.min(100, actual || 0));
+  const e = Math.max(0, Math.min(100, expected || 0));
+  const cls = a + 2 < e ? ' behind' : a > e + 2 ? ' ahead' : '';
+  return (
+    <div className={'pbar' + cls} title={`Actual ${a.toFixed(1)}% · expected by schedule ${e.toFixed(1)}%`}>
+      <div className="act" style={{ width: a + '%' }}></div>
+      <div className="exp" style={{ left: `calc(${e}% - 1px)` }}></div>
+    </div>
+  );
+}
+
+export function ProgressLegend() {
+  return (
+    <div className="legend">
+      <span><i style={{ background: 'var(--accent-2)' }}></i>Actual (milestones done)</span>
+      <span><i style={{ background: 'var(--warn)' }}></i>Expected by schedule</span>
+    </div>
+  );
+}

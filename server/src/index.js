@@ -5,6 +5,7 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const { requireAuth } = require('./middleware/auth');
+const migrate = require('./migrate');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -25,6 +26,7 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/lookups', require('./routes/lookups'));
 app.use('/api/requests', require('./routes/requests'));
 app.use('/api/plan-items', require('./routes/planItems'));
+app.use('/api/execution-requests', require('./routes/executionRequests'));
 app.use('/api/plans', require('./routes/plans'));
 app.use('/api/revisions', require('./routes/revisions'));
 app.use('/api/budgets', require('./routes/budgets'));
@@ -42,4 +44,6 @@ app.use((err, req, res, next) => {
 });
 
 const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`Procurement Planning API listening on :${port}`));
+migrate()
+  .then(() => app.listen(port, () => console.log(`Procurement Planning API listening on :${port}`)))
+  .catch(e => { console.error('Startup failed:', e); process.exit(1); });

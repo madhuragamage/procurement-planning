@@ -6,6 +6,7 @@ import TopNav from './components/TopNav.jsx';
 
 import LoginPage from './pages/LoginPage.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
+import BoardPage from './pages/BoardPage.jsx';
 import RequestsPage from './pages/RequestsPage.jsx';
 import AuthorisationsPage from './pages/AuthorisationsPage.jsx';
 import InboxPage from './pages/InboxPage.jsx';
@@ -32,11 +33,12 @@ function ProtectedShell() {
       <main>
         <Routes>
           <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="board" element={<Guard roles={['executive', 'management', 'admin', 'procurement']}><BoardPage /></Guard>} />
           <Route path="requests" element={<Guard roles={['requester', 'dept_head', 'procurement', 'admin']}><RequestsPage /></Guard>} />
           <Route path="authorisations" element={<Guard roles={['dept_head', 'admin']}><AuthorisationsPage /></Guard>} />
           <Route path="inbox" element={<Guard roles={['procurement', 'admin']}><InboxPage /></Guard>} />
           <Route path="plan" element={<PlanPage />} />
-          <Route path="revisions" element={<Guard roles={['procurement', 'management', 'admin']}><RevisionsPage /></Guard>} />
+          <Route path="revisions" element={<Guard roles={['procurement', 'management', 'admin', 'executive']}><RevisionsPage /></Guard>} />
           <Route path="execution" element={<ExecutionPage />} />
           <Route path="budgets" element={<BudgetsPage />} />
           <Route path="reports" element={<ReportsPage />} />

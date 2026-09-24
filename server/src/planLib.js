@@ -1,14 +1,26 @@
 const pool = require('./db');
 const rules = require('./rules');
-const { HttpError, num, optString, optDate, oneOf, reqString } = require('./util');
+const { HttpError, num, optString, optDate, oneOf, reqString, isWide, inScope } = require('./util');
 
 const ITEM_SELECT = `
-  SELECT i.*, r.ref_no, r.department_id, d.name AS department, d.code AS department_code,
+  SELECT i.*, r.ref_no, r.department_id, d.name AS department, d.code AS department_code, dv.name AS division,
+         r.sub_unit_id, su.name AS sub_unit, r.reason, r.reason_note,
          r.category_id, c.name AS category, c.manual_type, r.priority, r.required_date
   FROM plan_items i
   JOIN requests r ON r.id = i.request_id
   JOIN departments d ON d.id = r.department_id
+  LEFT JOIN divisions dv ON dv.id = d.division_id
+  LEFT JOIN sub_units su ON su.id = r.sub_unit_id
   JOIN categories c ON c.id = r.category_id`;
+
+// Department users (requester / dept_head) see only their own unit's items, and only once management
+// has approved the plan. Procurement, management, executive and admin see everything.
+async function visibleItems(user, items) {
+  if (isWide(user)) return items;
+  const [rows] = await pool.query("SELECT fy FROM plans WHERE status IN ('approved','frozen')");
+  const approved = new Set(rows.map(r => r.fy));
+  return items.filter(i => approved.has(i.plan_fy) && inScope(user, i.department_id, i.sub_unit_id));
+}
 
 const EDITABLE_STATES = ['planning', 'changes_requested'];
 
@@ -54,7 +66,7 @@ function parseItemFields(body) {
   if (body.description !== undefined) out.description = optString(body.description);
   if (body.tce_excl_vat_mn !== undefined) out.tce_excl_vat_mn = num(body.tce_excl_vat_mn, 'TCE (excl. VAT)', { max: 1e7 });
   if (body.vat_pct !== undefined) out.vat_pct = num(body.vat_pct, 'VAT %', { max: 100 });
-  if (body.funding_source !== undefined) out.funding_source = oneOf(body.funding_source, ['GOSL', 'Foreign'], 'Funding source');
+  if (body.funding_source !== undefined) out.funding_source = oneOf(body.funding_source, rules.FUNDING_SOURCES, 'Funding source');
   if (body.funding_agency !== undefined) out.funding_agency = optString(body.funding_agency, 120);
   if (body.year_offset !== undefined) out.year_offset = num(body.year_offset, 'Year', { min: 0, max: 2 });
   if (body.method !== undefined) out.method = body.method === '' || body.method === null ? null : oneOf(body.method, rules.METHODS, 'Method');
@@ -141,7 +153,7 @@ function delaySummary(item, today) {
 }
 
 module.exports = {
-  createItem, delaySummary,
+  visibleItems, createItem, delaySummary,
   ITEM_SELECT, EDITABLE_STATES, getPlan, ensurePlan, assertPlanEditable, loadItems, loadItem,
   parseItemFields, buildInsert, mergeSchedule, snapshotPlan
 };

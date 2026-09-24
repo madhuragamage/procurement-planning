@@ -2,7 +2,7 @@ const express = require('express');
 const pool = require('../db');
 const rules = require('../rules');
 const { requireRole } = require('../middleware/auth');
-const { wrap, HttpError, optString, audit, tx } = require('../util');
+const { wrap, HttpError, optString, audit, tx, isWide } = require('../util');
 const lib = require('../planLib');
 const { loadLimits } = require('./lookups');
 const { availability } = require('./budgets');
@@ -29,14 +29,25 @@ function incompleteItems(items) {
 router.get('/', wrap(async (req, res) => {
   const [rows] = await pool.query(
     `SELECT p.*, (SELECT COUNT(*) FROM plan_items i WHERE i.plan_fy = p.fy) AS item_count FROM plans p ORDER BY p.fy DESC`);
-  res.json(rows);
+  res.json(isWide(req.user) ? rows : rows.filter(p => ['approved', 'frozen'].includes(p.status)));
 }));
 
 router.get('/:fy', wrap(async (req, res) => {
   const fy = Number(req.params.fy);
   if (!Number.isInteger(fy)) throw new HttpError(400, 'Invalid year.');
   const plan = (await lib.getPlan(fy)) || { fy, status: 'planning', version: 0, review_comment: null, virtual: true };
-  const items = await lib.loadItems(fy);
+  const allItems = await lib.loadItems(fy);
+  if (!isWide(req.user)) {
+    // Department users only see their own unit's items, and only once management has approved the plan.
+    const mine = await lib.visibleItems(req.user, allItems);
+    const approved = ['approved', 'frozen'].includes(plan.status);
+    return res.json({
+      plan: { fy: plan.fy, status: plan.status, version: plan.version, frozen_at: plan.frozen_at || null, restricted: true },
+      summary: summarise(mine), incomplete: [], unplanned_authorised: 0, pending_revisions: 0, budget_warnings: [],
+      item_count: mine.length, visible: approved
+    });
+  }
+  const items = allItems;
   const [[pending]] = await pool.query(
     "SELECT COUNT(*) AS n FROM requests WHERE plan_fy = ? AND status = 'authorised' AND id NOT IN (SELECT request_id FROM plan_items)", [fy]);
   const [[revs]] = await pool.query("SELECT COUNT(*) AS n FROM plan_revisions WHERE plan_fy = ? AND status = 'submitted'", [fy]);
@@ -104,13 +115,13 @@ router.post('/:fy/freeze', requireRole('management', 'procurement', 'admin'), wr
   res.json({ ok: true });
 }));
 
-router.get('/:fy/snapshots', wrap(async (req, res) => {
+router.get('/:fy/snapshots', requireRole('admin', 'procurement', 'management', 'executive'), wrap(async (req, res) => {
   const [rows] = await pool.query(
     'SELECT s.id, s.fy, s.version, s.label, s.created_at, u.name AS created_by FROM plan_snapshots s LEFT JOIN users u ON u.id = s.created_by WHERE s.fy = ? ORDER BY s.id DESC', [Number(req.params.fy)]);
   res.json(rows);
 }));
 
-router.get('/:fy/snapshots/:id', wrap(async (req, res) => {
+router.get('/:fy/snapshots/:id', requireRole('admin', 'procurement', 'management', 'executive'), wrap(async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM plan_snapshots WHERE id = ? AND fy = ?', [Number(req.params.id), Number(req.params.fy)]);
   if (!rows.length) throw new HttpError(404, 'Snapshot not found.');
   res.json({ ...rows[0], data: JSON.parse(rows[0].data) });

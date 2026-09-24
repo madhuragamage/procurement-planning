@@ -1,7 +1,7 @@
 const express = require('express');
 const pool = require('../db');
 const { requireRole } = require('../middleware/auth');
-const { wrap, HttpError, optString, num, audit } = require('../util');
+const { wrap, HttpError, optString, num, audit, isWide } = require('../util');
 
 const router = express.Router();
 const MANAGE = ['procurement', 'management', 'admin'];
@@ -52,13 +52,14 @@ router.get('/', wrap(async (req, res) => {
   const [rows] = await pool.query(
     `SELECT b.*, d.name AS department, c.name AS category FROM budgets b JOIN departments d ON d.id = b.department_id LEFT JOIN categories c ON c.id = b.category_id
      ${req.query.year ? 'WHERE b.year = ?' : ''} ORDER BY b.year DESC, d.name, c.name`, req.query.year ? [Number(req.query.year)] : []);
-  res.json(rows);
+  res.json(isWide(req.user) ? rows : rows.filter(b => b.department_id === req.user.department_id));
 }));
 
 router.get('/availability', wrap(async (req, res) => {
   const year = Number(req.query.year);
   if (!Number.isInteger(year)) throw new HttpError(400, 'year is required.');
-  res.json(await availability(year));
+  const data = await availability(year);
+  res.json(isWide(req.user) ? data : data.filter(d => d.department_id === req.user.department_id));
 }));
 
 function parse(body) {

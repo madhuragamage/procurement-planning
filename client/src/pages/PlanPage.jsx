@@ -5,9 +5,9 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import ItemForm from '../components/ItemForm.jsx';
 import { Status, Msg, useAction, CommentAction } from '../components/ui.jsx';
-import { fmt, YEAR_LABELS, label } from '../lib/format.js';
+import { fmt, YEAR_LABELS, label, FUNDING_LABEL } from '../lib/format.js';
 
-export default function PlanPage() {
+function FullPlanPage() {
   const { user } = useAuth();
   const { fy } = useApp();
   const [info, setInfo] = useState(null);
@@ -28,6 +28,8 @@ export default function PlanPage() {
   const canEdit = ['procurement', 'admin'].includes(user.role) && ['planning', 'changes_requested'].includes(plan.status);
   const isProc = ['procurement', 'admin'].includes(user.role);
   const act = (path, msg) => async comment => { await run(() => api.post(`/plans/${fy}/${path}`, { comment }), msg); load(); };
+  const tracking = ['approved', 'frozen'].includes(plan.status);
+  const startNow = async it => { await run(() => api.post('/execution-requests', { plan_item_id: it.id, note: 'Started by the procurement unit' }), `${it.ref_no}: execution started.`); load(); };
   const grandTotal = info.summary.reduce((s, y) => s + y.tce_incl_vat_mn, 0);
 
   return (
@@ -95,13 +97,14 @@ export default function PlanPage() {
             <div className="card">
               {list.length === 0 ? <div className="empty">No items.</div> : (
                 <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
-                  <thead><tr><th>Ref</th><th>Description</th><th>Department</th><th>Category</th><th>Method</th><th>Committee</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Start</th><th>Delivery</th><th>Checks</th><th></th></tr></thead>
+                  <thead><tr><th>Ref</th><th>Description</th><th>Department</th><th>Category</th><th>Method</th><th>Committee</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Start</th><th>Delivery</th><th>Checks</th><th>Execution</th><th></th></tr></thead>
                   <tbody>{list.map(it => (
                     <tr key={it.id}>
                       <td>{it.ref_no}</td><td className="wrap">{it.title}</td><td>{it.department}</td><td>{it.category}</td>
                       <td>{it.method || <span className="pill bad">none</span>}</td><td>{it.committee_level}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(it.tce_incl_vat_mn)}</td><td>{it.procurement_start}</td><td>{it.expected_delivery}</td>
                       <td title={it.checks.warnings.join('\n')}>{it.checks.warnings.length ? <span className="pill warn">{it.checks.warnings.length} warning{it.checks.warnings.length > 1 ? 's' : ''}</span> : <span className="pill ok">ok</span>}</td>
+                      <td>{tracking ? <><Status value={it.exec_status} />{isProc && it.status === 'planned' && !['accepted', 'requested'].includes(it.exec_status) && <button className="mini plain" style={{ marginLeft: 6 }} disabled={busy} onClick={() => startNow(it)}>start</button>}</> : ''}</td>
                       <td style={{ display: 'flex', gap: 6 }}>
                         {canEdit ? <>
                           <button className="mini plain" onClick={() => { setEditing(it); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>edit</button>
@@ -149,4 +152,84 @@ export default function PlanPage() {
       </div>
     </div>
   );
+}
+
+// Department users see only their own unit's items, and only after management approves the plan.
+function DepartmentPlan() {
+  const { user } = useAuth();
+  const { fy, lookups } = useApp();
+  const [info, setInfo] = useState(null);
+  const [items, setItems] = useState([]);
+  const { busy, error, ok, run } = useAction();
+  const today = new Date().toISOString().slice(0, 10);
+  const soon = new Date(Date.now() + lookups.reminders.lead_days * 86400000).toISOString().slice(0, 10);
+
+  const load = useCallback(async () => {
+    const i = await api.get('/plans/' + fy);
+    setInfo(i);
+    setItems(['approved', 'frozen'].includes(i.plan.status) ? await api.get('/plan-items?plan_fy=' + fy) : []);
+  }, [fy]);
+  useEffect(() => { setInfo(null); load(); }, [load]);
+
+  if (!info) return <div className="loading"><span className="spinner"></span> Loading…</div>;
+  const approved = ['approved', 'frozen'].includes(info.plan.status);
+  const request = async it => {
+    const note = window.prompt('Note for the procurement unit (optional):', '');
+    if (note === null) return;
+    await run(() => api.post('/execution-requests', { plan_item_id: it.id, note }), `${it.ref_no}: execution request sent to the procurement unit.`);
+    load();
+  };
+
+  return (
+    <div>
+      <div className="between" style={{ marginBottom: 10 }}>
+        <div>
+          <h2 style={{ margin: 0 }}>Approved procurement plan {fy}-{fy + 2}</h2>
+          <span className="hint" style={{ margin: 0 }}>{user.department}{user.sub_unit ? ' / ' + user.sub_unit : ''} — your unit's planned procurements</span>
+        </div>
+        <div><Status value={info.plan.status} /> {approved && <span className="pill warn">version {info.plan.version}</span>}</div>
+      </div>
+      <Msg error={error} ok={ok} />
+      {!approved ? (
+        <div className="card"><div className="empty">The {fy} plan has not been approved by management yet. Your unit's items appear here once it is.</div></div>
+      ) : (
+        <>
+          <p className="hint">When a procurement's planned start date approaches, send an <b>execution request</b> so the procurement unit can begin. Approval in the plan does not start procurement by itself.</p>
+          {[0, 1, 2].map(o => {
+            const list = items.filter(i => i.year_offset === o && i.status !== 'cancelled');
+            return (
+              <div key={o}>
+                <div className="section-title">{o === 0 ? 'Annual plan' : 'Tentative plan'} — {YEAR_LABELS(fy)[o]}</div>
+                <div className="card">
+                  {list.length === 0 ? <div className="empty">No items for your unit.</div> : (
+                    <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
+                      <thead><tr><th>Ref</th><th>Description</th><th>Unit</th><th>Reason</th><th>Method</th><th>Funding</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Planned start</th><th>Delivery</th><th>Status</th><th>Execution</th><th></th></tr></thead>
+                      <tbody>{list.map(it => {
+                        const near = it.status === 'planned' && it.procurement_start && it.procurement_start <= soon && ['not_requested', 'returned'].includes(it.exec_status);
+                        const canRequest = it.status === 'planned' && ['not_requested', 'returned'].includes(it.exec_status);
+                        return (
+                          <tr key={it.id}>
+                            <td>{it.ref_no}</td><td className="wrap">{it.title}</td><td>{it.sub_unit || it.department}</td><td>{it.reason}</td><td>{it.method}</td><td>{FUNDING_LABEL[it.funding_source]}</td>
+                            <td style={{ textAlign: 'right' }}>{fmt(it.tce_incl_vat_mn)}</td>
+                            <td>{it.procurement_start}{near && <span className={'pill ' + (it.procurement_start < today ? 'bad' : 'warn')} style={{ marginLeft: 6 }}>{it.procurement_start < today ? 'due' : 'soon'}</span>}</td>
+                            <td>{it.expected_delivery}</td><td><Status value={it.status} /></td><td><Status value={it.exec_status} /></td>
+                            <td>{canRequest && <button className={near ? 'primary' : 'mini plain'} style={near ? { padding: '5px 10px', fontSize: 12 } : undefined} disabled={busy} onClick={() => request(it)}>request execution</button>}</td>
+                          </tr>
+                        );
+                      })}</tbody>
+                    </table></div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function PlanPage() {
+  const { user } = useAuth();
+  return ['requester', 'dept_head'].includes(user.role) ? <DepartmentPlan /> : <FullPlanPage />;
 }

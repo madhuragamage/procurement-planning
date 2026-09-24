@@ -95,3 +95,14 @@ test('checkItem flags shopping over cap, low committee and short windows', () =>
   const ok = r.checkItem({ method: 'NCB', tce_excl_vat_mn: 10, vat_pct: 18, funding_source: 'GOSL', procurement_start: '2027-01-01', expected_delivery: '2027-08-01' }, 'goods');
   assert.deepStrictEqual(ok.warnings, []);
 });
+
+test('funding classes: LECO and GOSL use domestic limits, Foreign and Grant use foreign limits', () => {
+  assert.strictEqual(r.limitClass('LECO'), 'GOSL');
+  assert.strictEqual(r.limitClass('GOSL'), 'GOSL');
+  assert.strictEqual(r.limitClass('Foreign'), 'Foreign');
+  assert.strictEqual(r.limitClass('Grant'), 'Foreign');
+  assert.strictEqual(r.committeeLevel(60, 'LECO'), 'DPC/PPC');
+  assert.strictEqual(r.committeeLevel(60, 'Grant'), 'RPC');
+  assert.strictEqual(r.shoppingAuthority(30, 'goods', 'Grant'), 'DPC/PPC');
+  assert.strictEqual(r.shoppingAuthority(30, 'goods', 'LECO'), null);
+});

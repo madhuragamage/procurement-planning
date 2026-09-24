@@ -1,7 +1,7 @@
 const express = require('express');
 const pool = require('../db');
 const rules = require('../rules');
-const { wrap, HttpError } = require('../util');
+const { wrap, HttpError, isWide } = require('../util');
 const lib = require('../planLib');
 const { availability } = require('./budgets');
 
@@ -31,7 +31,7 @@ function totalsRow(rows, keys, label = 'Total') {
 }
 
 const base = it => ({
-  ref_no: it.ref_no, title: it.title, department: it.department, category: it.category, type: TYPE_LABEL[it.manual_type],
+  ref_no: it.ref_no, title: it.title, department: it.department, division: it.division || '', sub_unit: it.sub_unit || '', reason: it.reason + (it.reason_note ? ` (${it.reason_note})` : ''), category: it.category, type: TYPE_LABEL[it.manual_type],
   method: it.method || '', committee: it.committee_level || '', funding: it.funding_source + (it.funding_agency ? ` (${it.funding_agency})` : ''),
   tce_excl: r2(it.tce_excl_vat_mn), tce_incl: r2(incl(it)), start: it.procurement_start || '', delivery: it.expected_delivery || ''
 });
@@ -45,7 +45,7 @@ const BUILDERS = {
     const y = YEAR_LABELS(fy);
     return {
       title: `Master Procurement Plan ${fy}-${fy + 2} (Annex I format)`, subtitle: 'Three-year rolling plan; year 1 is the annual plan, years 2-3 are tentative. Values in LKR million.',
-      columns: [{ key: 'no', label: 'No.' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description of procurement' }, { key: 'department', label: 'Department' }, { key: 'type', label: 'Type' }, { key: 'category', label: 'Category' },
+      columns: [{ key: 'no', label: 'No.' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description of procurement' }, { key: 'department', label: 'Department' }, { key: 'sub_unit', label: 'Sub unit' }, { key: 'type', label: 'Type' }, { key: 'category', label: 'Category' }, { key: 'reason', label: 'Reason' },
         { key: 'method', label: 'Method' }, { key: 'committee', label: 'Committee' }, { key: 'funding', label: 'Funding' }, { key: 'tce_excl', label: 'TCE excl. VAT', ...money }, { key: 'vat', label: 'VAT', ...money }, { key: 'tce_incl', label: 'TCE incl. VAT', ...money },
         { key: 'y0', label: y[0], ...money }, { key: 'y1', label: y[1], ...money }, { key: 'y2', label: y[2], ...money }, { key: 'start', label: 'Procurement start' }, { key: 'delivery', label: 'Expected delivery' }],
       rows: [...rows, totalsRow(rows, ['tce_excl', 'vat', 'tce_incl', 'y0', 'y1', 'y2'])]
@@ -58,7 +58,7 @@ const BUILDERS = {
     }));
     return {
       title: `Annual Procurement Plan ${fy} (Annex II format)`, subtitle: 'Procurement planned for the coming financial year. Values in LKR million.',
-      columns: [{ key: 'no', label: 'No.' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description' }, { key: 'department', label: 'Department' }, { key: 'type', label: 'Type' }, { key: 'method', label: 'Method' }, { key: 'procedure', label: 'Procedure' }, { key: 'pq', label: 'PQ' },
+      columns: [{ key: 'no', label: 'No.' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description' }, { key: 'department', label: 'Department' }, { key: 'sub_unit', label: 'Sub unit' }, { key: 'type', label: 'Type' }, { key: 'reason', label: 'Reason' }, { key: 'method', label: 'Method' }, { key: 'procedure', label: 'Procedure' }, { key: 'pq', label: 'PQ' },
         { key: 'committee', label: 'Committee' }, { key: 'funding', label: 'Funding' }, { key: 'priority', label: 'Priority' }, { key: 'tce_excl', label: 'TCE excl. VAT', ...money }, { key: 'tce_incl', label: 'TCE incl. VAT', ...money }, { key: 'start', label: 'Start' }, { key: 'delivery', label: 'Delivery' }],
       rows: [...rows, totalsRow(rows, ['tce_excl', 'tce_incl'])]
     };
@@ -133,6 +133,21 @@ const BUILDERS = {
     };
   },
 
+  async 'by-division'(items, q, fy) {
+    const groups = new Map();
+    for (const it of items) {
+      const k = (it.division || 'Unassigned') + '|' + it.department;
+      const g = groups.get(k) || { division: it.division || 'Unassigned', department: it.department, count: 0, total: 0 };
+      g.count += 1; g.total += incl(it); groups.set(k, g);
+    }
+    const rows = [...groups.values()].map(g => ({ ...g, total: r2(g.total) })).sort((a, b) => a.division.localeCompare(b.division) || a.department.localeCompare(b.department));
+    return {
+      title: `Summary by division and department ${fy}-${fy + 2}`, subtitle: 'LKR million incl. VAT across the three plan years.',
+      columns: [{ key: 'division', label: 'Division' }, { key: 'department', label: 'Department' }, { key: 'count', label: 'Items', ...money }, { key: 'total', label: 'TCE incl. VAT', ...money }],
+      rows: [...rows, { _total: true, division: 'Total', count: rows.reduce((s, r) => s + r.count, 0), total: r2(rows.reduce((s, r) => s + r.total, 0)) }]
+    };
+  },
+
   async 'by-method'(items, q, fy) {
     const groups = new Map();
     for (const it of items) { const k = it.method || '(not assigned)'; const g = groups.get(k) || { method: k, count: 0, total: 0 }; g.count += 1; g.total += incl(it); groups.set(k, g); }
@@ -190,7 +205,7 @@ const BUILDERS = {
 router.get('/budget', wrap(async (req, res) => {
   const year = Number(req.query.year);
   if (!Number.isInteger(year)) throw new HttpError(400, 'year is required.');
-  const data = await availability(year);
+  const data = (await availability(year)).filter(d => isWide(req.user) || d.department_id === req.user.department_id);
   const rows = data.map(d => ({ department: d.department, allocated: d.allocated, committed: d.committed, pipeline: d.pipeline, remaining: d.remaining, state: d.over_budget ? 'OVER BUDGET' : 'OK' }));
   res.json({
     meta: await meta(year), title: `Budget availability ${year}`, subtitle: 'Committed = planned items (incl. VAT) scheduled for this budget year; pipeline = authorised requests not yet planned. LKR million.',
@@ -204,7 +219,7 @@ router.get('/:type', wrap(async (req, res) => {
   if (!builder) throw new HttpError(404, 'Unknown report.');
   const fy = Number(req.query.plan_fy);
   if (!Number.isInteger(fy)) throw new HttpError(400, 'plan_fy is required.');
-  const all = await lib.loadItems(fy);
+  const all = await lib.visibleItems(req.user, await lib.loadItems(fy));
   const items = filters(all.filter(i => i.status !== 'cancelled' || req.params.type === 'performance'), req.query);
   const out = await builder(items, req.query, fy);
   res.json({ meta: await meta(fy), ...out });

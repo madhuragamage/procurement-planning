@@ -6,6 +6,7 @@ const METHODS = [
   'Direct Contracting', 'Force Account', 'Emergency', 'CBO', 'Co-financing'
 ];
 const BIDDING_PROCEDURES = ['Single-envelope', 'Two-envelope', 'Two-stage'];
+const FUNDING_SOURCES = ['LECO', 'GOSL', 'Foreign', 'Grant'];
 const COMMITTEE_LEVELS = ['CAO/AO/PD', 'RPC', 'DPC/PPC', 'MPC', 'HLPC/SHLPC'];
 
 // Section 2.9(1): the lowest committee whose limit (inclusive, TCE incl. VAT) covers the value.
@@ -39,6 +40,12 @@ const DEFAULT_LIMITS = {
 };
 
 // Section 6.3 minimum bidding periods (days).
+// Section 2.9 distinguishes GOSL-funded from foreign-funded procurement. LECO own funds follow the
+// GOSL limits; grants are treated as foreign-funded (change here if LECO's grants are domestic).
+function limitClass(funding) {
+  return funding === 'Foreign' || funding === 'Grant' ? 'Foreign' : 'GOSL';
+}
+
 function methodFamily(method) {
   if (method === 'ICB' || method === 'LIB') return 'ICB';
   if (method === 'NCB' || method === 'LNB') return 'NCB';
@@ -61,7 +68,7 @@ function mergeLimits(overrides) {
 }
 
 function committeeLevel(tceInclMn, funding, limits = DEFAULT_LIMITS) {
-  const rows = limits.committee[funding === 'Foreign' ? 'Foreign' : 'GOSL'];
+  const rows = limits.committee[limitClass(funding)];
   for (const r of rows) {
     if (r.upTo === null || tceInclMn <= r.upTo) return r.level;
   }
@@ -70,7 +77,7 @@ function committeeLevel(tceInclMn, funding, limits = DEFAULT_LIMITS) {
 
 // Lowest approving authority that may procure this value by Shopping, or null if above every cap.
 function shoppingAuthority(tceInclMn, manualType, funding, limits = DEFAULT_LIMITS) {
-  const table = limits.shopping[funding === 'Foreign' ? 'Foreign' : 'GOSL'];
+  const table = limits.shopping[limitClass(funding)];
   const type = manualType === 'works' ? 'works' : manualType === 'services' ? 'services' : 'goods';
   for (const level of ['CAO/AO/PD', 'RPC', 'DPC/PPC', 'MPC']) {
     const cap = table[level] && table[level][type];
@@ -167,7 +174,7 @@ function buildSchedule({ start, delivery, method, tceInclMn }) {
 function checkItem(item, manualType, limits = DEFAULT_LIMITS) {
   const warnings = [];
   const incl = tceInclVat(item.tce_excl_vat_mn, item.vat_pct);
-  const funding = item.funding_source === 'Foreign' ? 'Foreign' : 'GOSL';
+  const funding = limitClass(item.funding_source);
   const suggestedLevel = committeeLevel(incl, funding, limits);
   const fam = methodFamily(item.method);
   const out = {
@@ -215,7 +222,7 @@ function checkItem(item, manualType, limits = DEFAULT_LIMITS) {
 }
 
 module.exports = {
-  METHODS, BIDDING_PROCEDURES, COMMITTEE_LEVELS, DEFAULT_LIMITS, MILESTONES, ANNEX_VIII, ANNEX_IX,
+  METHODS, FUNDING_SOURCES, limitClass, BIDDING_PROCEDURES, COMMITTEE_LEVELS, DEFAULT_LIMITS, MILESTONES, ANNEX_VIII, ANNEX_IX,
   methodFamily, tceInclVat, mergeLimits, committeeLevel, shoppingAuthority, minBiddingDays,
   annexBiddingWeeks, addDays, diffDays, buildSchedule, checkItem
 };

@@ -26,7 +26,7 @@ async function requireAuth(req, res, next) {
   catch (e) { return res.status(401).json({ error: 'Session expired - please sign in again.' }); }
   try {
     const [rows] = await pool.query(
-      'SELECT u.id, u.email, u.name, u.role, u.department_id, d.name AS department FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = ? AND u.active = 1',
+      'SELECT u.id, u.email, u.name, u.role, u.department_id, d.name AS department, u.sub_unit_id, su.name AS sub_unit FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN sub_units su ON su.id = u.sub_unit_id WHERE u.id = ? AND u.active = 1',
       [payload.sub]
     );
     if (!rows.length) return res.status(401).json({ error: 'Account not found or deactivated.' });

@@ -53,4 +53,17 @@ function oneOf(v, list, name) {
   return v;
 }
 
-module.exports = { HttpError, wrap, audit, tx, reqString, optString, num, optDate, oneOf };
+// Roles that see every department (read access). requester / dept_head are limited to their own unit.
+const WIDE_ROLES = ['admin', 'procurement', 'management', 'executive'];
+const isWide = user => WIDE_ROLES.includes(user.role);
+
+// Can this user see a record belonging to (department, sub unit)?
+// Sub-unit requesters see only their sub unit; department-level users see the whole department.
+function inScope(user, departmentId, subUnitId) {
+  if (isWide(user)) return true;
+  if (departmentId !== user.department_id) return false;
+  if (user.role === 'requester' && user.sub_unit_id) return subUnitId === user.sub_unit_id;
+  return true;
+}
+
+module.exports = { WIDE_ROLES, isWide, inScope, HttpError, wrap, audit, tx, reqString, optString, num, optDate, oneOf };

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useApp } from '../context/AppContext.jsx';
 import { Msg, useAction } from './ui.jsx';
-import { fmt, YEAR_LABELS } from '../lib/format.js';
+import { fmt, YEAR_LABELS, FUNDING_LABEL } from '../lib/format.js';
 
 const pick = (s, fy) => ({
   title: s.title || '', tce_excl_vat_mn: s.tce_excl_vat_mn, vat_pct: s.vat_pct, funding_source: s.funding_source, funding_agency: s.funding_agency || '',
@@ -54,7 +54,7 @@ export default function ItemForm({ mode, source, categoryId, onSaved, onCancel }
         <label className="field"><span>VAT %</span>
           <input type="number" step="any" min="0" max="100" value={f.vat_pct} onChange={e => set('vat_pct', e.target.value)} /></label>
         <label className="field"><span>Funding</span>
-          <select value={f.funding_source} onChange={e => set('funding_source', e.target.value)}><option value="GOSL">GOSL / own funds</option><option value="Foreign">Foreign funded</option></select></label>
+          <select value={f.funding_source} onChange={e => set('funding_source', e.target.value)}>{lookups.fundingSources.map(x => <option key={x} value={x}>{FUNDING_LABEL[x]}</option>)}</select></label>
         <label className="field"><span>Plan year (cycle {source.plan_fy ?? ''})</span>
           <select value={f.year_offset} onChange={e => set('year_offset', Number(e.target.value))}>
             {YEAR_LABELS(Number(source.plan_fy) || 0).map((l, i) => <option key={i} value={i}>{l}</option>)}

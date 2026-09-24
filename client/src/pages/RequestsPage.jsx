@@ -3,11 +3,11 @@ import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { Status, Msg, useAction } from '../components/ui.jsx';
-import { fmt, inclVat, YEAR_LABELS, PRIORITY } from '../lib/format.js';
+import { fmt, inclVat, YEAR_LABELS, PRIORITY, FUNDING_LABEL, REASON_LABEL } from '../lib/format.js';
 
 const blank = fy => ({
-  title: '', description: '', category_id: '', tce_excl_vat_mn: '', vat_pct: 18, funding_source: 'GOSL', funding_agency: '',
-  priority: 'N', plan_fy: fy, year_offset: 0, required_date: '', department_id: ''
+  title: '', description: '', category_id: '', tce_excl_vat_mn: '', vat_pct: 18, funding_source: 'LECO', funding_agency: '', reason: 'New', reason_note: '',
+  priority: 'N', plan_fy: fy, year_offset: 0, required_date: '', department_id: '', sub_unit_id: ''
 });
 
 function RequestForm({ initial, onDone, onCancel }) {
@@ -18,10 +18,13 @@ function RequestForm({ initial, onDone, onCancel }) {
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const editing = !!initial.id;
   const wide = ['procurement', 'admin'].includes(user.role);
+  const ownSubUnit = user.role === 'requester' && user.sub_unit_id;
+  const deptId = Number((wide && f.department_id) || f.department_id || user.department_id);
+  const subUnits = lookups.subUnits.filter(u => u.department_id === deptId && u.active);
 
   async function save(e) {
     e.preventDefault();
-    const body = { ...f, department_id: f.department_id || undefined };
+    const body = { ...f, department_id: f.department_id || undefined, sub_unit_id: ownSubUnit ? undefined : f.sub_unit_id };
     const out = await run(() => editing ? api.put('/requests/' + initial.id, body) : api.post('/requests', body));
     if (out) onDone(out);
   }
@@ -50,6 +53,25 @@ function RequestForm({ initial, onDone, onCancel }) {
           </select>
         </label>
       )}
+      <div className="grid g3">
+        <label className="field"><span>Requesting unit</span>
+          {ownSubUnit ? <input type="text" value={`${user.department} / ${user.sub_unit}`} readOnly /> : (
+            <select value={f.sub_unit_id || ''} onChange={e => set('sub_unit_id', e.target.value)}>
+              <option value="">Department level</option>
+              {subUnits.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>)}
+        </label>
+        <label className="field"><span>Reason for procurement</span>
+          <select value={f.reason} onChange={e => set('reason', e.target.value)}>
+            {lookups.reasons.map(r => <option key={r} value={r}>{REASON_LABEL[r]}</option>)}
+          </select>
+        </label>
+        {f.reason === 'Other' && (
+          <label className="field"><span>Specify the reason</span>
+            <input type="text" value={f.reason_note || ''} onChange={e => set('reason_note', e.target.value)} maxLength={200} required />
+          </label>
+        )}
+      </div>
       <label className="field"><span>Scope / quantity / justification</span>
         <textarea rows={3} value={f.description || ''} onChange={e => set('description', e.target.value)} />
       </label>
@@ -70,11 +92,11 @@ function RequestForm({ initial, onDone, onCancel }) {
       <div className="grid g4">
         <label className="field"><span>Funding</span>
           <select value={f.funding_source} onChange={e => set('funding_source', e.target.value)}>
-            <option value="GOSL">GOSL / own funds</option><option value="Foreign">Foreign funded</option>
+            {lookups.fundingSources.map(x => <option key={x} value={x}>{FUNDING_LABEL[x]}</option>)}
           </select>
         </label>
         <label className="field"><span>Funding agency</span>
-          <input type="text" value={f.funding_agency || ''} onChange={e => set('funding_agency', e.target.value)} placeholder="e.g. ADB, JICA" />
+          <input type="text" value={f.funding_agency || ''} onChange={e => set('funding_agency', e.target.value)} placeholder="e.g. ADB, JICA, donor" />
         </label>
         <label className="field"><span>Priority</span>
           <select value={f.priority} onChange={e => set('priority', e.target.value)}>
@@ -125,7 +147,7 @@ export default function RequestsPage() {
       <div className="between" style={{ marginBottom: 14 }}>
         <div>
           <h2 style={{ margin: 0 }}>Procurement requests</h2>
-          <span className="hint" style={{ margin: 0 }}>{['procurement', 'admin', 'management'].includes(user.role) ? 'All departments' : user.department}</span>
+          <span className="hint" style={{ margin: 0 }}>{['procurement', 'admin', 'management', 'executive'].includes(user.role) ? 'All departments' : user.department + (user.sub_unit ? ' / ' + user.sub_unit : '')}</span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ width: 'auto' }}>
@@ -141,14 +163,14 @@ export default function RequestsPage() {
       <div className="card">
         {shown.length === 0 ? <div className="empty">No requests yet.</div> : (
           <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
-            <thead><tr><th>Ref</th><th>Title</th><th>Department</th><th>Category</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Cycle</th><th>Required</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Ref</th><th>Title</th><th>Unit</th><th>Category</th><th>Reason</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Funding</th><th>Cycle</th><th>Required</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {shown.map(r => (
                 <Fragment key={r.id}>
                   <tr>
                     <td><button className="link" onClick={() => setOpenId(openId === r.id ? null : r.id)}>{r.ref_no}</button></td>
-                    <td className="wrap">{r.title}</td><td>{r.department}</td><td>{r.category}</td>
-                    <td style={{ textAlign: 'right' }}>{fmt(inclVat(r.tce_excl_vat_mn, r.vat_pct))}</td>
+                    <td className="wrap">{r.title}</td><td>{r.department}{r.sub_unit ? ' / ' + r.sub_unit : ''}</td><td>{r.category}</td><td>{r.reason}{r.reason_note ? ': ' + r.reason_note : ''}</td>
+                    <td style={{ textAlign: 'right' }}>{fmt(inclVat(r.tce_excl_vat_mn, r.vat_pct))}</td><td>{FUNDING_LABEL[r.funding_source]}</td>
                     <td>{r.plan_fy}+{r.year_offset}</td><td>{r.required_date}</td>
                     <td><Status value={r.status} />{r.plan_item_id ? <span className="pill ok" style={{ marginLeft: 4 }}>in plan</span> : null}</td>
                     <td style={{ display: 'flex', gap: 6 }}>
@@ -158,10 +180,10 @@ export default function RequestsPage() {
                     </td>
                   </tr>
                   {openId === r.id && detail && (
-                    <tr><td colSpan={9} style={{ background: 'var(--panel-2)' }}>
+                    <tr><td colSpan={11} style={{ background: 'var(--panel-2)' }}>
                       {detail.description && <p style={{ margin: '4px 0', fontFamily: 'var(--body)' }}>{detail.description}</p>}
                       {r.review_comment && <p className="hint" style={{ margin: '4px 0' }}>Reviewer comment: {r.review_comment}</p>}
-                      <div className="hint" style={{ margin: '4px 0' }}>Requested by {detail.requested_by_name}{detail.authorised_by_name ? ` · authorised by ${detail.authorised_by_name}` : ''} · {detail.funding_source}{detail.funding_agency ? ` (${detail.funding_agency})` : ''} · priority {PRIORITY[detail.priority]}</div>
+                      <div className="hint" style={{ margin: '4px 0' }}>Requested by {detail.requested_by_name}{detail.authorised_by_name ? ` · authorised by ${detail.authorised_by_name}` : ''} · {FUNDING_LABEL[detail.funding_source]}{detail.funding_agency ? ` (${detail.funding_agency})` : ''} · priority {PRIORITY[detail.priority]}</div>
                       <div className="hint" style={{ margin: '4px 0' }}>{detail.history.map(h => `${h.at.slice(0, 16).replace('T', ' ')} ${h.action} by ${h.user || '-'}${h.comment ? ' — ' + h.comment : ''}`).join('  |  ')}</div>
                     </td></tr>
                   )}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Status, Msg, useAction, CommentAction } from '../components/ui.jsx';
-import { fmt, inclVat, PRIORITY } from '../lib/format.js';
+import { fmt, inclVat, PRIORITY, FUNDING_LABEL } from '../lib/format.js';
 
 export default function AuthorisationsPage() {
   const [pending, setPending] = useState([]);
@@ -28,7 +28,7 @@ export default function AuthorisationsPage() {
             <div style={{ fontFamily: 'var(--mono)' }}>LKR {fmt(inclVat(r.tce_excl_vat_mn, r.vat_pct))} Mn incl. VAT</div>
           </div>
           <p className="hint" style={{ margin: '6px 0' }}>
-            {r.department} · {r.category} · {r.funding_source}{r.funding_agency ? ` (${r.funding_agency})` : ''} · priority {PRIORITY[r.priority]} · plan {r.plan_fy}+{r.year_offset} · required {r.required_date} · by {r.requested_by_name}
+            {r.department}{r.sub_unit ? ' / ' + r.sub_unit : ''} · {r.category} · reason: {r.reason}{r.reason_note ? ` (${r.reason_note})` : ''} · {FUNDING_LABEL[r.funding_source]}{r.funding_agency ? ` (${r.funding_agency})` : ''} · priority {PRIORITY[r.priority]} · plan {r.plan_fy}+{r.year_offset} · required {r.required_date} · by {r.requested_by_name}
           </p>
           {r.description && <p style={{ margin: '0 0 10px', fontSize: 13 }}>{r.description}</p>}
           <CommentAction busy={busy} actions={[

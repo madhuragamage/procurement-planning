@@ -22,11 +22,12 @@ router.get('/', wrap(async (req, res) => {
   if (req.query.category_id) { where.push('r.category_id = ?'); params.push(Number(req.query.category_id)); }
   const [rows] = await pool.query(`${lib.ITEM_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY i.plan_fy, i.year_offset, d.name, i.id`, params);
   const limits = await loadLimits();
-  res.json(rows.map(r => withDerived(r, limits)));
+  res.json((await lib.visibleItems(req.user, rows)).map(r => withDerived(r, limits)));
 }));
 
 router.get('/:id', wrap(async (req, res) => {
-  const item = await lib.loadItem(Number(req.params.id));
+  const found = await lib.loadItem(Number(req.params.id));
+  const item = found && (await lib.visibleItems(req.user, [found]))[0];
   if (!item) throw new HttpError(404, 'Plan item not found.');
   const [history] = await pool.query(
     "SELECT a.action, a.comment, a.at, u.name AS user FROM audit_log a LEFT JOIN users u ON u.id = a.user_id WHERE a.entity = 'plan_item' AND a.entity_id = ? ORDER BY a.id", [String(item.id)]);
@@ -92,6 +93,7 @@ router.put('/:id/execution', requireRole(...PROC), wrap(async (req, res) => {
     const plan = await lib.getPlan(cur.plan_fy, conn);
     if (!plan || !['approved', 'frozen'].includes(plan.status)) throw new HttpError(409, 'Progress can be recorded once the plan is approved.');
     if (cur.status === 'cancelled') throw new HttpError(409, 'This item has been cancelled.');
+    if (cur.exec_status !== 'accepted') throw new HttpError(409, 'Execution has not been requested by the department and accepted by the procurement unit yet. See Procurement inbox → Execution requests.');
 
     const f = {};
     const ms = { ...(cur.milestones || {}) };

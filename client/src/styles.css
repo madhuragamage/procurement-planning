@@ -118,3 +118,13 @@ td.wrap{white-space:normal;min-width:180px}
   @page{margin:12mm}
   .landscape{page-break-before:avoid}
 }
+.pbar{position:relative;height:12px;border-radius:7px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;min-width:110px}
+.pbar>.act{position:absolute;left:0;top:0;bottom:0;background:var(--accent-2)}
+.pbar>.exp{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--warn)}
+.pbar.behind>.act{background:var(--bad)}
+.pbar.ahead>.act{background:var(--good)}
+.bigpct{font-family:var(--mono);font-size:40px;font-weight:600;line-height:1}
+.legend{display:flex;gap:14px;font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:6px;flex-wrap:wrap}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.reminder{border-left:4px solid var(--warn)}
+.reminder.overdue{border-left-color:var(--bad)}

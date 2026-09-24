@@ -90,17 +90,20 @@ export default function ExecutionPage() {
       <div className="card">
         {shown.length === 0 ? <div className="empty">No items.</div> : (
           <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
-            <thead><tr><th>Ref</th><th>Description</th><th>Department</th><th>Method</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Status</th><th>Overdue</th><th></th></tr></thead>
+            <thead><tr><th>Ref</th><th>Description</th><th>Department</th><th>Method</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Status</th><th>Execution</th><th>Overdue</th><th></th></tr></thead>
             <tbody>{shown.map(i => (
               <tr key={i.id}><td>{i.ref_no}</td><td className="wrap">{i.title}</td><td>{i.department}</td><td>{i.method}</td>
-                <td style={{ textAlign: 'right' }}>{fmt(i.tce_incl_vat_mn)}</td><td><Status value={i.status} /></td>
+                <td style={{ textAlign: 'right' }}>{fmt(i.tce_incl_vat_mn)}</td><td><Status value={i.status} /></td><td><Status value={i.exec_status} /></td>
                 <td>{tracking && i.delay.overdue.length > 0 ? <span className="pill bad" title={i.delay.overdue.map(o => `${o.label} (${o.days} d)`).join('\n')}>{i.delay.max_overdue_days} d</span> : ''}</td>
                 <td><button className="mini plain" onClick={() => setOpenId(i.id === openId ? null : i.id)}>{i.id === openId ? 'close' : 'open'}</button></td></tr>
             ))}</tbody>
           </table></div>
         )}
       </div>
-      {open && tracking && <Detail key={open.id + open.updated_at} item={open} canEdit={canEdit} onSaved={load} />}
+      {open && tracking && open.exec_status !== 'accepted' && (
+        <div className="note">Execution of {open.ref_no} has not started: the requesting department must send an execution request and the procurement unit accept it (Procurement inbox). Current state: {open.exec_status.replace('_', ' ')}.</div>
+      )}
+      {open && tracking && open.exec_status === 'accepted' && <Detail key={open.id + open.updated_at} item={open} canEdit={canEdit} onSaved={load} />}
     </div>
   );
 }

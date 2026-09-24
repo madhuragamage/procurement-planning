@@ -5,12 +5,20 @@ const { requireRole } = require('../middleware/auth');
 const { wrap, HttpError, reqString, oneOf, audit } = require('../util');
 
 const router = express.Router();
-const ROLES = ['admin', 'requester', 'dept_head', 'procurement', 'management'];
+const ROLES = ['admin', 'requester', 'dept_head', 'procurement', 'management', 'executive'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const COLS = 'u.id, u.email, u.name, u.role, u.department_id, d.name AS department, u.active, u.created_at';
+const COLS = 'u.id, u.email, u.name, u.role, u.department_id, d.name AS department, u.sub_unit_id, su.name AS sub_unit, u.active, u.created_at';
+
+// A sub unit must belong to the user's department; empty means department-level.
+async function checkSubUnit(value, departmentId) {
+  if (value === undefined || value === null || value === '') return null;
+  const [rows] = await pool.query('SELECT id FROM sub_units WHERE id = ? AND department_id = ?', [Number(value), departmentId]);
+  if (!rows.length) throw new HttpError(400, 'That sub unit does not belong to the selected department.');
+  return rows[0].id;
+}
 
 router.get('/', requireRole('admin'), wrap(async (req, res) => {
-  const [rows] = await pool.query(`SELECT ${COLS} FROM users u LEFT JOIN departments d ON d.id = u.department_id ORDER BY u.name`);
+  const [rows] = await pool.query(`SELECT ${COLS} FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN sub_units su ON su.id = u.sub_unit_id ORDER BY u.name`);
   res.json(rows);
 }));
 
@@ -23,8 +31,9 @@ router.post('/', requireRole('admin'), wrap(async (req, res) => {
   if (typeof password !== 'string' || password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
   const dept = Number(req.body.department_id);
   if (!Number.isInteger(dept)) throw new HttpError(400, 'Department is required.');
+  const subUnit = await checkSubUnit(req.body.sub_unit_id, dept);
   const hash = await bcrypt.hash(password, 10);
-  const [r] = await pool.query('INSERT INTO users (email, name, password_hash, role, department_id) VALUES (?,?,?,?,?)', [email, name, hash, role, dept]);
+  const [r] = await pool.query('INSERT INTO users (email, name, password_hash, role, department_id, sub_unit_id) VALUES (?,?,?,?,?,?)', [email, name, hash, role, dept, subUnit]);
   await audit(null, 'user', r.insertId, 'create', req.user.id, `${email} as ${role}`);
   res.status(201).json({ id: r.insertId });
 }));
@@ -37,7 +46,14 @@ router.put('/:id', requireRole('admin'), wrap(async (req, res) => {
     sets.push('role = ?'); vals.push(oneOf(req.body.role, ROLES, 'Role'));
     if (id === req.user.id && req.body.role !== 'admin') throw new HttpError(400, 'You cannot remove your own admin role.');
   }
-  if (req.body.department_id !== undefined) { sets.push('department_id = ?'); vals.push(Number(req.body.department_id)); }
+  if (req.body.department_id !== undefined || req.body.sub_unit_id !== undefined) {
+    const [[cur]] = await pool.query('SELECT department_id, sub_unit_id FROM users WHERE id = ?', [id]);
+    if (!cur) throw new HttpError(404, 'User not found.');
+    const dept = req.body.department_id !== undefined ? Number(req.body.department_id) : cur.department_id;
+    // Changing department clears the sub unit unless a valid new one is supplied.
+    const sub = req.body.sub_unit_id !== undefined ? req.body.sub_unit_id : (dept === cur.department_id ? cur.sub_unit_id : null);
+    sets.push('department_id = ?', 'sub_unit_id = ?'); vals.push(dept, await checkSubUnit(sub, dept));
+  }
   if (req.body.active !== undefined) {
     if (id === req.user.id && !req.body.active) throw new HttpError(400, 'You cannot deactivate your own account.');
     sets.push('active = ?'); vals.push(req.body.active ? 1 : 0);

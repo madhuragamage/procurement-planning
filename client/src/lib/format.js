@@ -7,15 +7,21 @@ export const STATUS_CLASS = {
   draft: 'warn', submitted: 'warn', returned: 'bad', rejected: 'bad', authorised: 'ok',
   planning: 'warn', changes_requested: 'bad', approved: 'ok', frozen: 'ok',
   planned: 'warn', in_progress: 'warn', awarded: 'ok', completed: 'ok', cancelled: 'bad',
-  approved_rev: 'ok'
+  pending: 'warn', requested: 'warn', accepted: 'ok', not_requested: 'warn'
 };
 
 export const label = s => String(s || '').replace(/_/g, ' ');
 
 export const ROLE_LABEL = {
   admin: 'Administrator', requester: 'Department user', dept_head: 'Department head',
-  procurement: 'Procurement unit', management: 'Management'
+  procurement: 'Procurement unit', management: 'Management', executive: 'Board / CEO'
 };
+
+export const FUNDING_LABEL = { LECO: 'LECO (own funds)', GOSL: 'GOSL', Foreign: 'Foreign funded', Grant: 'Grant' };
+export const REASON_LABEL = { ROL: 'ROL (re-order level)', Replacement: 'Replacement', New: 'New', Other: 'Other' };
+export const EXEC_LABEL = { not_requested: 'not requested', requested: 'requested', accepted: 'accepted', returned: 'returned' };
+
+export const pct = n => (n === null || n === undefined ? '' : `${Number(n).toFixed(1)}%`);
 
 export const YEAR_LABELS = fy => [`${fy} (annual)`, `${fy + 1} (tentative)`, `${fy + 2} (tentative)`];
 export const PRIORITY = { U: 'Urgent', P: 'Priority', N: 'Normal' };

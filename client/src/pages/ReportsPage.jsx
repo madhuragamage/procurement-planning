@@ -10,6 +10,7 @@ const REPORTS = [
   ['preparatory', 'Preparatory Procurement Plan — Annex VI'],
   ['by-category', 'Category-wise listing'],
   ['dept-category', 'Department × category summary'],
+  ['by-division', 'Summary by division and department'],
   ['by-method', 'Summary by method'],
   ['by-committee', 'Summary by committee'],
   ['performance', 'Quarterly Procurement Performance Report'],

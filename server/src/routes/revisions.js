@@ -23,7 +23,7 @@ async function loadChanges(revisionId, conn) {
   return rows;
 }
 
-router.get('/', wrap(async (req, res) => {
+router.get('/', requireRole('admin', 'procurement', 'management', 'executive'), wrap(async (req, res) => {
   const params = []; let where = '';
   if (req.query.plan_fy) { where = 'WHERE v.plan_fy = ?'; params.push(Number(req.query.plan_fy)); }
   const [rows] = await pool.query(
@@ -32,7 +32,7 @@ router.get('/', wrap(async (req, res) => {
   res.json(rows);
 }));
 
-router.get('/:id', wrap(async (req, res) => {
+router.get('/:id', requireRole('admin', 'procurement', 'management', 'executive'), wrap(async (req, res) => {
   const v = await loadRevision(Number(req.params.id));
   if (!v) throw new HttpError(404, 'Revision not found.');
   res.json({ ...v, changes: await loadChanges(v.id) });
