@@ -4,12 +4,25 @@ const { requireRole } = require('../middleware/auth');
 const { wrap, HttpError, reqString, oneOf, audit, tx } = require('../util');
 const rules = require('../rules');
 
+const recurrence = require('../recurrence');
+
 const router = express.Router();
-const REASONS = ['ROL', 'Replacement', 'New', 'Other'];
+const REASONS = ['ROL', 'Replacement', 'New', 'Action Plan', 'Other'];
 
 async function loadLimits() {
   const [rows] = await pool.query("SELECT value FROM settings WHERE `key` = 'limits'");
   return rules.mergeLimits(rows.length ? rows[0].value : null);
+}
+
+// The department that is the Supplies unit; its department head may view (not edit) the Supplies function.
+async function loadSuppliesDepartment() {
+  const [rows] = await pool.query("SELECT value FROM settings WHERE `key` = 'supplies_unit'");
+  return rows.length && rows[0].value.department_id ? Number(rows[0].value.department_id) : null;
+}
+const SUPPLIES_VIEW_ROLES = ['supplies', 'procurement', 'admin', 'management', 'executive'];
+async function canViewSupplies(user) {
+  if (SUPPLIES_VIEW_ROLES.includes(user.role)) return true;
+  return user.role === 'dept_head' && !!user.department_id && user.department_id === await loadSuppliesDepartment();
 }
 
 async function loadReminderDays() {
@@ -37,7 +50,8 @@ router.get('/', wrap(async (req, res) => {
   res.json({
     divisions, departments, subUnits, categories,
     reminders: { lead_days: await loadReminderDays() },
-    fundingSources: rules.FUNDING_SOURCES, reasons: REASONS,
+    suppliesUnit: { department_id: await loadSuppliesDepartment() },
+    fundingSources: rules.FUNDING_SOURCES, reasons: REASONS, expenseTypes: recurrence.EXPENSE_TYPES,
     org: org.length ? org[0].value : {},
     methods: rules.METHODS, biddingProcedures: rules.BIDDING_PROCEDURES,
     committeeLevels: rules.COMMITTEE_LEVELS, milestones: rules.MILESTONES,
@@ -154,6 +168,17 @@ router.put('/reminders', requireRole('admin'), wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+router.put('/supplies-unit', requireRole('admin'), wrap(async (req, res) => {
+  const dept = req.body.department_id ? Number(req.body.department_id) : null;
+  if (dept) {
+    const [rows] = await pool.query('SELECT id FROM departments WHERE id = ?', [dept]);
+    if (!rows.length) throw new HttpError(404, 'Department not found.');
+  }
+  await pool.query("INSERT INTO settings (`key`, value) VALUES ('supplies_unit', ?) ON DUPLICATE KEY UPDATE value = VALUES(value)", [JSON.stringify({ department_id: dept })]);
+  await audit(null, 'settings', 'supplies_unit', 'update', req.user.id, dept ? `department #${dept}` : 'none');
+  res.json({ ok: true });
+}));
+
 router.put('/org', requireRole('admin'), wrap(async (req, res) => {
   const name = reqString(req.body.name, 'Organisation name', 160);
   await pool.query("INSERT INTO settings (`key`, value) VALUES ('org', ?) ON DUPLICATE KEY UPDATE value = VALUES(value)", [JSON.stringify({ name })]);
@@ -175,3 +200,4 @@ module.exports = router;
 module.exports.loadLimits = loadLimits;
 module.exports.loadReminderDays = loadReminderDays;
 module.exports.REASONS = REASONS;
+module.exports.canViewSupplies = canViewSupplies;

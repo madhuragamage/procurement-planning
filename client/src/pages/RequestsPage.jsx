@@ -3,12 +3,44 @@ import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { Status, Msg, useAction } from '../components/ui.jsx';
-import { fmt, inclVat, YEAR_LABELS, PRIORITY, FUNDING_LABEL, REASON_LABEL } from '../lib/format.js';
+import { fmt, inclVat, YEAR_LABELS, PRIORITY, FUNDING_LABEL, REASON_LABEL, EXPENSE_LABEL, recurLabel, recurYears, phasingLabel } from '../lib/format.js';
 
 const blank = fy => ({
   title: '', description: '', category_id: '', tce_excl_vat_mn: '', vat_pct: 18, funding_source: 'LECO', funding_agency: '', reason: 'New', reason_note: '',
+  expense_type: '', recurrence: 'one_time', annual_increase_pct: '', budget_phasing: null,
   priority: 'N', plan_fy: fy, year_offset: 0, required_date: '', department_id: '', sub_unit_id: ''
 });
+
+// Whole value in the start year, or spread over up to three budget years (percentages from the start year).
+function BudgetPhasing({ f, set }) {
+  const phased = Array.isArray(f.budget_phasing);
+  const p = phased ? f.budget_phasing : [];
+  const start = Number(f.plan_fy) + Number(f.year_offset);
+  const incl = inclVat(f.tce_excl_vat_mn, f.vat_pct);
+  const sum = p.reduce((s, v) => s + (Number(v) || 0), 0);
+  const setYear = (k, v) => { const next = [...p]; next[k] = v; set('budget_phasing', next); };
+  return (
+    <div className="hintbox" style={{ marginBottom: 12 }}>
+      <div className="grid g4" style={{ alignItems: 'end' }}>
+        <label className="field" style={{ marginBottom: 0 }}><span>Budget requirement</span>
+          <select value={phased ? 'phased' : 'single'} onChange={e => set('budget_phasing', e.target.value === 'phased' ? [50, 50, ''] : null)}>
+            <option value="single">Whole amount in {start || 'the start year'}</option>
+            <option value="phased">Spread over more than one year</option>
+          </select></label>
+        {phased && [0, 1, 2].map(k => (
+          <label className="field" key={k} style={{ marginBottom: 0 }}><span>{start + k}{k === 0 ? ' (start)' : ''} — % of value</span>
+            <input type="number" step="any" min="0" max="100" value={p[k] ?? ''} onChange={e => setYear(k, e.target.value)} />
+            <span style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'none' }}>LKR {fmt(incl * (Number(p[k]) || 0) / 100)} Mn incl. VAT</span>
+          </label>
+        ))}
+      </div>
+      {phased && <div style={{ marginTop: 8, fontSize: 12, color: Math.abs(sum - 100) > 0.01 ? 'var(--bad)' : 'var(--muted)' }}>
+        Total {Math.round(sum * 100) / 100}% {Math.abs(sum - 100) > 0.01 ? '— the shares must add up to 100%.' : '— each year\'s share is counted against that year\'s budget.'}
+      </div>}
+      {!phased && <div className="hint" style={{ margin: '8px 0 0' }}>Choose "spread" when the procurement starts in {start || 'this year'} but part of the payment falls in later years' budgets (e.g. multi-year works or phased deliveries).</div>}
+    </div>
+  );
+}
 
 function RequestForm({ initial, onDone, onCancel }) {
   const { user } = useAuth();
@@ -34,7 +66,7 @@ function RequestForm({ initial, onDone, onCancel }) {
       <h2>{editing ? `Edit ${initial.ref_no}` : 'New procurement request'}</h2>
       <p className="hint">Describe what your department needs. After your department head authorises it, the procurement unit assigns the method and schedule.</p>
       <Msg error={error} />
-      <div className="grid g3">
+      <div className="grid g4">
         <label className="field" style={{ gridColumn: 'span 2' }}><span>Title</span>
           <input type="text" value={f.title} onChange={e => set('title', e.target.value)} required maxLength={200} />
         </label>
@@ -42,6 +74,12 @@ function RequestForm({ initial, onDone, onCancel }) {
           <select value={f.category_id} onChange={e => set('category_id', e.target.value)} required>
             <option value="">Select…</option>
             {lookups.categories.filter(c => c.active || c.id === f.category_id).map(c => <option key={c.id} value={c.id}>{c.name} ({c.manual_type})</option>)}
+          </select>
+        </label>
+        <label className="field"><span>CAPEX / OPEX</span>
+          <select value={f.expense_type} onChange={e => set('expense_type', e.target.value)} required>
+            <option value="">Select…</option>
+            {lookups.expenseTypes.map(x => <option key={x} value={x}>{EXPENSE_LABEL[x]}</option>)}
           </select>
         </label>
       </div>
@@ -114,6 +152,28 @@ function RequestForm({ initial, onDone, onCancel }) {
           </label>
         </div>
       </div>
+      <BudgetPhasing f={f} set={set} />
+      <div className="grid g4">
+        <label className="field"><span>Occurrence</span>
+          <select value={f.recurrence} onChange={e => set('recurrence', e.target.value)}>
+            <option value="one_time">One time</option>
+            <option value="recurrent">Recurrent annually</option>
+          </select>
+        </label>
+        {f.recurrence === 'recurrent' && (
+          <label className="field"><span>Annual increase %</span>
+            <input type="number" step="any" min="0" max="100" value={f.annual_increase_pct} onChange={e => set('annual_increase_pct', e.target.value)} required />
+          </label>
+        )}
+        {f.recurrence === 'recurrent' && (
+          <div className="field" style={{ gridColumn: 'span 2' }}><span className="hint" style={{ display: 'block', fontSize: 11, marginBottom: 5 }}>TENTATIVE PLAN (INCL. VAT, LKR MN)</span>
+            {Number(f.year_offset) >= 2
+              ? <span className="hint">This is the last year of the cycle, so there are no later years to repeat in.</span>
+              : <span style={{ fontFamily: 'var(--mono)', fontSize: 13 }}>{recurYears(f.tce_excl_vat_mn, f.vat_pct, f.annual_increase_pct, Number(f.year_offset)).map(y => `${Number(f.plan_fy) + y.offset}: ${fmt(y.incl)}`).join('  ·  ')}</span>}
+          </div>
+        )}
+      </div>
+      {f.recurrence === 'recurrent' && <p className="hint">When the procurement unit adds this to the plan, it is repeated in each later year of the cycle as a tentative item, increased by this percentage per year.</p>}
       <div style={{ display: 'flex', gap: 10 }}>
         <button className="primary" type="submit" disabled={busy}>{editing ? 'Save changes' : 'Save as draft'}</button>
         <button className="ghost" type="button" onClick={onCancel}>Cancel</button>
@@ -163,13 +223,15 @@ export default function RequestsPage() {
       <div className="card">
         {shown.length === 0 ? <div className="empty">No requests yet.</div> : (
           <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
-            <thead><tr><th>Ref</th><th>Title</th><th>Unit</th><th>Category</th><th>Reason</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Funding</th><th>Cycle</th><th>Required</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Ref</th><th>Title</th><th>Unit</th><th>Category</th><th>Type</th><th>Reason</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Funding</th><th>Cycle</th><th>Required</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {shown.map(r => (
                 <Fragment key={r.id}>
                   <tr>
                     <td><button className="link" onClick={() => setOpenId(openId === r.id ? null : r.id)}>{r.ref_no}</button></td>
-                    <td className="wrap">{r.title}</td><td>{r.department}{r.sub_unit ? ' / ' + r.sub_unit : ''}</td><td>{r.category}</td><td>{r.reason}{r.reason_note ? ': ' + r.reason_note : ''}</td>
+                    <td className="wrap">{r.title}</td><td>{r.department}{r.sub_unit ? ' / ' + r.sub_unit : ''}</td><td>{r.category}</td>
+                    <td>{r.expense_type}{r.recurrence === 'recurrent' && <span className="pill warn" style={{ marginLeft: 4 }} title={recurLabel(r)}>+{Number(r.annual_increase_pct)}%/yr</span>}{phasingLabel(r) && <span className="pill warn" style={{ marginLeft: 4 }} title={'Budget phasing: ' + phasingLabel(r)}>phased</span>}</td>
+                    <td>{r.reason}{r.reason_note ? ': ' + r.reason_note : ''}</td>
                     <td style={{ textAlign: 'right' }}>{fmt(inclVat(r.tce_excl_vat_mn, r.vat_pct))}</td><td>{FUNDING_LABEL[r.funding_source]}</td>
                     <td>{r.plan_fy}+{r.year_offset}</td><td>{r.required_date}</td>
                     <td><Status value={r.status} />{r.plan_item_id ? <span className="pill ok" style={{ marginLeft: 4 }}>in plan</span> : null}</td>
@@ -180,10 +242,10 @@ export default function RequestsPage() {
                     </td>
                   </tr>
                   {openId === r.id && detail && (
-                    <tr><td colSpan={11} style={{ background: 'var(--panel-2)' }}>
+                    <tr><td colSpan={12} style={{ background: 'var(--panel-2)' }}>
                       {detail.description && <p style={{ margin: '4px 0', fontFamily: 'var(--body)' }}>{detail.description}</p>}
                       {r.review_comment && <p className="hint" style={{ margin: '4px 0' }}>Reviewer comment: {r.review_comment}</p>}
-                      <div className="hint" style={{ margin: '4px 0' }}>Requested by {detail.requested_by_name}{detail.authorised_by_name ? ` · authorised by ${detail.authorised_by_name}` : ''} · {FUNDING_LABEL[detail.funding_source]}{detail.funding_agency ? ` (${detail.funding_agency})` : ''} · priority {PRIORITY[detail.priority]}</div>
+                      <div className="hint" style={{ margin: '4px 0' }}>Requested by {detail.requested_by_name}{detail.authorised_by_name ? ` · authorised by ${detail.authorised_by_name}` : ''} · {FUNDING_LABEL[detail.funding_source]}{detail.funding_agency ? ` (${detail.funding_agency})` : ''} · priority {PRIORITY[detail.priority]} · {EXPENSE_LABEL[detail.expense_type]} · {recurLabel(detail)}{phasingLabel(detail) ? ` · budget phasing ${phasingLabel(detail)}` : ''}</div>
                       <div className="hint" style={{ margin: '4px 0' }}>{detail.history.map(h => `${h.at.slice(0, 16).replace('T', ' ')} ${h.action} by ${h.user || '-'}${h.comment ? ' — ' + h.comment : ''}`).join('  |  ')}</div>
                     </td></tr>
                   )}

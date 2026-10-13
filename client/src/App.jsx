@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
-import { AppProvider } from './context/AppContext.jsx';
+import { AppProvider, useApp } from './context/AppContext.jsx';
+import { canSeeSupplies } from './lib/format.js';
 import { ThemeProvider } from './context/ThemeContext.jsx';
 import TopNav from './components/TopNav.jsx';
 
@@ -13,6 +14,8 @@ import InboxPage from './pages/InboxPage.jsx';
 import PlanPage from './pages/PlanPage.jsx';
 import RevisionsPage from './pages/RevisionsPage.jsx';
 import ExecutionPage from './pages/ExecutionPage.jsx';
+import TecPage from './pages/TecPage.jsx';
+import SuppliesPage from './pages/SuppliesPage.jsx';
 import BudgetsPage from './pages/BudgetsPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 import AdminPage from './pages/AdminPage.jsx';
@@ -21,6 +24,12 @@ function Guard({ roles, children }) {
   const { user } = useAuth();
   if (roles && !roles.includes(user.role)) return <Navigate to="/app/dashboard" replace />;
   return children;
+}
+
+function SuppliesGuard({ children }) {
+  const { user } = useAuth();
+  const { lookups } = useApp();
+  return canSeeSupplies(user, lookups) ? children : <Navigate to="/app/dashboard" replace />;
 }
 
 function ProtectedShell() {
@@ -40,6 +49,8 @@ function ProtectedShell() {
           <Route path="plan" element={<PlanPage />} />
           <Route path="revisions" element={<Guard roles={['procurement', 'management', 'admin', 'executive']}><RevisionsPage /></Guard>} />
           <Route path="execution" element={<ExecutionPage />} />
+          <Route path="supplies" element={<SuppliesGuard><SuppliesPage /></SuppliesGuard>} />
+          <Route path="tec" element={<Guard roles={['procurement', 'management', 'admin', 'executive']}><TecPage /></Guard>} />
           <Route path="budgets" element={<BudgetsPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="admin" element={<Guard roles={['admin']}><AdminPage /></Guard>} />

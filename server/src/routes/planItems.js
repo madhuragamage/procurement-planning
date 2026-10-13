@@ -20,6 +20,7 @@ router.get('/', wrap(async (req, res) => {
   if (req.query.status) { where.push('i.status = ?'); params.push(String(req.query.status)); }
   if (req.query.department_id) { where.push('r.department_id = ?'); params.push(Number(req.query.department_id)); }
   if (req.query.category_id) { where.push('r.category_id = ?'); params.push(Number(req.query.category_id)); }
+  if (req.query.expense_type) { where.push('r.expense_type = ?'); params.push(String(req.query.expense_type)); }
   const [rows] = await pool.query(`${lib.ITEM_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY i.plan_fy, i.year_offset, d.name, i.id`, params);
   const limits = await loadLimits();
   res.json((await lib.visibleItems(req.user, rows)).map(r => withDerived(r, limits)));
@@ -40,7 +41,7 @@ router.post('/', requireRole(...PROC), wrap(async (req, res) => {
   const limits = await loadLimits();
   const id = await tx(async conn => {
     const created = await lib.createItem(conn, requestId, req.body, req.user.id, limits);
-    await audit(conn, 'plan_item', created.id, 'create', req.user.id, `from ${created.ref_no}`);
+    await audit(conn, 'plan_item', created.id, 'create', req.user.id, `from ${created.ref_no}${created.repeats ? ` with ${created.repeats} recurrent repeat(s)` : ''}`);
     return created.id;
   });
   res.status(201).json(withDerived(await lib.loadItem(id), limits));
@@ -77,10 +78,62 @@ router.delete('/:id', requireRole(...PROC), wrap(async (req, res) => {
     const [[cur]] = await conn.query('SELECT * FROM plan_items WHERE id = ? FOR UPDATE', [Number(req.params.id)]);
     if (!cur) throw new HttpError(404, 'Plan item not found.');
     await lib.assertPlanEditable(cur.plan_fy, conn);
-    await conn.query('DELETE FROM plan_items WHERE id = ?', [cur.id]);
-    await audit(conn, 'plan_item', cur.id, 'remove', req.user.id, 'removed from plan (request stays authorised)');
+    // Removing the item itself also removes its projected repeats, so the request can be planned again.
+    const [repeats] = cur.recur_index === 0
+      ? await conn.query('SELECT id FROM plan_items WHERE request_id = ? AND recur_index > 0', [cur.request_id]) : [[]];
+    for (const x of [cur, ...repeats]) {
+      await conn.query('DELETE FROM plan_items WHERE id = ?', [x.id]);
+      await audit(conn, 'plan_item', x.id, 'remove', req.user.id, x === cur ? 'removed from plan (request stays authorised)' : `recurrent repeat of #${cur.id} removed with it`);
+    }
   });
   res.json({ ok: true });
+}));
+
+// Working schedule once execution is authorised. GET gives the standard (auto) weeks per milestone for this
+// item; PUT applies either those or custom weeks from a start date, writing each milestone's target date.
+const autoWeeks = (item, start) => {
+  const gaps = rules.milestoneGaps({ method: item.method, tceInclMn: rules.tceInclVat(item.tce_excl_vat_mn, item.vat_pct), manualType: item.manual_type, start, delivery: item.expected_delivery });
+  return Object.fromEntries(Object.entries(gaps).map(([k, d]) => [k, Math.round((d / 7) * 10) / 10]));
+};
+
+async function schedulable(conn, id) {
+  const item = await lib.loadItem(id, conn);
+  if (!item) throw new HttpError(404, 'Plan item not found.');
+  if (item.status === 'cancelled') throw new HttpError(409, 'This item has been cancelled.');
+  if (item.exec_status !== 'accepted') throw new HttpError(409, 'The schedule is set once execution has been authorised.');
+  return item;
+}
+
+router.get('/:id/schedule', requireRole(...PROC), wrap(async (req, res) => {
+  const item = await schedulable(pool, Number(req.params.id));
+  const start = optDate(req.query.start, 'Start') || item.schedule_start || item.procurement_start || new Date().toISOString().slice(0, 10);
+  res.json({ mode: item.schedule_mode, start, auto_weeks: autoWeeks(item, start), custom_weeks: item.schedule_weeks || null, milestones: rules.MILESTONES });
+}));
+
+router.put('/:id/schedule', requireRole(...PROC), wrap(async (req, res) => {
+  const mode = oneOf(req.body.mode, ['auto', 'custom'], 'Schedule');
+  const start = optDate(req.body.start, 'Start date');
+  if (!start) throw new HttpError(400, 'Enter the date the procurement starts.');
+  const out = await tx(async conn => {
+    const item = await schedulable(conn, Number(req.params.id));
+    let weeks = autoWeeks(item, start);
+    if (mode === 'custom') {
+      weeks = {};
+      for (const m of rules.MILESTONES) {
+        const v = req.body.weeks && req.body.weeks[m.key];
+        weeks[m.key] = v === '' || v == null ? 0 : num(v, `Weeks for "${m.label}"`, { min: 0, max: 260 });
+      }
+    }
+    const dates = rules.scheduleFromWeeks(start, weeks);
+    const ms = { ...(item.milestones || {}) };
+    for (const m of rules.MILESTONES) ms[m.key] = { scheduled: null, revised: null, actual: null, ...(ms[m.key] || {}), revised: dates[m.key] };
+    await conn.query('UPDATE plan_items SET milestones = ?, schedule_mode = ?, schedule_start = ?, schedule_weeks = ? WHERE id = ?',
+      [JSON.stringify(ms), mode, start, JSON.stringify(weeks), item.id]);
+    const total = Object.values(weeks).reduce((s, w) => s + w, 0);
+    await audit(conn, 'plan_item', item.id, 'schedule-set', req.user.id, `${mode} from ${start}: ${Math.round(total * 10) / 10} weeks, completion ${dates.completion}`);
+    return { dates, weeks };
+  });
+  res.json({ ok: true, ...out });
 }));
 
 // Progress tracking after approval: revised/actual dates and contract details. The approved

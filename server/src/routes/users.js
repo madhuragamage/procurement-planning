@@ -5,7 +5,7 @@ const { requireRole } = require('../middleware/auth');
 const { wrap, HttpError, reqString, oneOf, audit } = require('../util');
 
 const router = express.Router();
-const ROLES = ['admin', 'requester', 'dept_head', 'procurement', 'management', 'executive'];
+const ROLES = ['admin', 'requester', 'dept_head', 'procurement', 'management', 'executive', 'supplies'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const COLS = 'u.id, u.email, u.name, u.role, u.department_id, d.name AS department, u.sub_unit_id, su.name AS sub_unit, u.active, u.created_at';
 

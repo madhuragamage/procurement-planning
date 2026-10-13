@@ -15,10 +15,13 @@ app.use(cors({ origin: process.env.FRONTEND_ORIGIN, credentials: true }));
 app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(rateLimit({ windowMs: 60 * 1000, max: 300 }));
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: 'Too many attempts - try again later.' } });
+// Brute-force guard: only failed sign-in / registration attempts count, so signing in and out
+// (and session checks such as /me) never lock anyone out.
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, skipSuccessfulRequests: true, message: { error: 'Too many failed sign-in attempts - try again in 15 minutes.' } });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
-app.use('/api/auth', authLimiter, require('./routes/auth'));
+app.use(['/api/auth/login', '/api/auth/register'], authLimiter);
+app.use('/api/auth', require('./routes/auth'));
 
 // Everything below needs a signed-in user.
 app.use('/api', requireAuth);
@@ -29,6 +32,9 @@ app.use('/api/plan-items', require('./routes/planItems'));
 app.use('/api/execution-requests', require('./routes/executionRequests'));
 app.use('/api/plans', require('./routes/plans'));
 app.use('/api/revisions', require('./routes/revisions'));
+app.use('/api/change-requests', require('./routes/changeRequests'));
+app.use('/api/tec', require('./routes/tec'));
+app.use('/api/supplies', require('./routes/supplies'));
 app.use('/api/budgets', require('./routes/budgets'));
 app.use('/api/rules', require('./routes/rules'));
 app.use('/api/reports', require('./routes/reports'));
@@ -44,6 +50,19 @@ app.use((err, req, res, next) => {
 });
 
 const port = process.env.PORT || 4000;
+// Reminder e-mails, checked at start-up and every hour: TEC members (before the due date and once it
+// lapses), suppliers (Performance Bond / proforma invoice overdue) and bond expiry notices to Supplies.
+function scheduleReminders() {
+  const { runReminders } = require('./routes/tec');
+  const { runJob } = require('./routes/supplies');
+  const tick = () => Promise.all([
+    runReminders().then(n => { if (n) console.log(`TEC reminders sent: ${n}`); }).catch(e => console.error('TEC reminder job failed:', e.message)),
+    runJob().then(n => { if (n) console.log(`Supplies reminders sent: ${n}`); }).catch(e => console.error('Supplies reminder job failed:', e.message))
+  ]);
+  tick();
+  setInterval(tick, 60 * 60 * 1000);
+}
+
 migrate()
-  .then(() => app.listen(port, () => console.log(`Procurement Planning API listening on :${port}`)))
+  .then(() => app.listen(port, () => { console.log(`Procurement Planning API listening on :${port}`); scheduleReminders(); }))
   .catch(e => { console.error('Startup failed:', e); process.exit(1); });

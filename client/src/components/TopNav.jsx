@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
-import { ROLE_LABEL } from '../lib/format.js';
+import { ROLE_LABEL, canSeeSupplies } from '../lib/format.js';
 import { FySelect } from './ui.jsx';
 
 // [path, label, roles allowed to see the tab (null = everyone)]
@@ -15,6 +15,8 @@ const TABS = [
   ['plan', 'Plan', null],
   ['revisions', 'Revisions', ['procurement', 'management', 'admin', 'executive']],
   ['execution', 'Execution', null],
+  ['tec', 'TEC', ['procurement', 'management', 'admin', 'executive']],
+  ['supplies', 'Supplies', 'supplies'],
   ['budgets', 'Budgets', null],
   ['reports', 'Reports', null],
   ['admin', 'Admin', ['admin']]
@@ -24,7 +26,7 @@ export default function TopNav() {
   const { user, logout } = useAuth();
   const { lookups, fy, setFy } = useApp();
   const { theme, toggleTheme } = useTheme();
-  const tabs = TABS.filter(([, , roles]) => !roles || roles.includes(user.role));
+  const tabs = TABS.filter(([, , roles]) => !roles || (roles === 'supplies' ? canSeeSupplies(user, lookups) : roles.includes(user.role)));
 
   return (
     <header className="top no-print">

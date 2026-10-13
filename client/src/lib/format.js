@@ -14,11 +14,29 @@ export const label = s => String(s || '').replace(/_/g, ' ');
 
 export const ROLE_LABEL = {
   admin: 'Administrator', requester: 'Department user', dept_head: 'Department head',
-  procurement: 'Procurement unit', management: 'Management', executive: 'Board / CEO'
+  procurement: 'Procurement unit', management: 'Management', executive: 'Board / CEO', supplies: 'Supplies Unit'
 };
+// Who may see the Supplies function: the Supplies Unit and the wider roles, plus (read-only) the head of
+// the department the admin has marked as the Supplies department.
+export const canSeeSupplies = (user, lookups) => ['supplies', 'procurement', 'management', 'admin', 'executive'].includes(user.role)
+  || (user.role === 'dept_head' && !!lookups?.suppliesUnit?.department_id && user.department_id === lookups.suppliesUnit.department_id);
+export const BID_TYPE = { tender: 'Tender', quotation: 'Quotation' };
+// Default class for a method: competitive bidding is a tender, shopping a quotation.
+export const suggestBidType = method => (['ICB', 'LIB', 'NCB', 'LNB'].includes(method) ? 'tender' : String(method || '').startsWith('Shopping') ? 'quotation' : '');
 
 export const FUNDING_LABEL = { LECO: 'LECO (own funds)', GOSL: 'GOSL', Foreign: 'Foreign funded', Grant: 'Grant' };
-export const REASON_LABEL = { ROL: 'ROL (re-order level)', Replacement: 'Replacement', New: 'New', Other: 'Other' };
+export const REASON_LABEL = { ROL: 'ROL (re-order level)', Replacement: 'Replacement', New: 'New', 'Action Plan': 'Action Plan', Other: 'Other' };
+export const EXPENSE_LABEL = { CAPEX: 'CAPEX (capital)', OPEX: 'OPEX (operational)' };
+// "2026: 40% · 2027: 60%" for a request/item whose budget is phased over years; '' otherwise.
+export const phasingLabel = r => Array.isArray(r.budget_phasing) && r.budget_phasing.length > 1
+  ? r.budget_phasing.map((p, k) => `${Number(r.plan_fy) + Number(r.year_offset) + k}: ${p}%`).join(' · ') : '';
+export const recurLabel = r => r.recurrence === 'recurrent' ? `recurrent +${Number(r.annual_increase_pct)}%/yr` : 'one time';
+// Estimate for each year a recurrent need repeats in, from its year in the cycle to the end of the cycle.
+export const recurYears = (excl, vat, pct, offset) => {
+  const out = [];
+  for (let k = 0; offset + k <= 2; k++) out.push({ offset: offset + k, incl: inclVat((Number(excl) || 0) * Math.pow(1 + (Number(pct) || 0) / 100, k), vat) });
+  return out;
+};
 export const EXEC_LABEL = { not_requested: 'not requested', requested: 'requested', accepted: 'accepted', returned: 'returned' };
 
 export const pct = n => (n === null || n === undefined ? '' : `${Number(n).toFixed(1)}%`);

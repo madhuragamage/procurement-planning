@@ -4,6 +4,8 @@ const rules = require('../rules');
 const { requireRole } = require('../middleware/auth');
 const { wrap, HttpError, reqString, optString, num, optDate, oneOf, audit, tx, isWide, inScope } = require('../util');
 const { REASONS } = require('./lookups');
+const recurrence = require('../recurrence');
+const phasing = require('../phasing');
 
 const router = express.Router();
 
@@ -17,7 +19,7 @@ const SELECT = `
   JOIN categories c ON c.id = r.category_id
   JOIN users u ON u.id = r.requested_by
   LEFT JOIN users a ON a.id = r.authorised_by
-  LEFT JOIN plan_items pi ON pi.request_id = r.id`;
+  LEFT JOIN plan_items pi ON pi.request_id = r.id AND pi.recur_index = 0`;
 
 async function getRequest(id) {
   const [rows] = await pool.query(`${SELECT} WHERE r.id = ?`, [id]);
@@ -44,7 +46,15 @@ function parseBody(body, departmentId) {
   const reason = oneOf(body.reason || 'New', REASONS, 'Reason');
   const reasonNote = optString(body.reason_note, 200);
   if (reason === 'Other' && !reasonNote) throw new HttpError(400, 'Describe the reason when "Other" is selected.');
+  const recur = oneOf(body.recurrence || 'one_time', recurrence.RECURRENCE, 'Recurrence');
+  let budgetPhasing;
+  try { budgetPhasing = phasing.parse(body.budget_phasing); } catch (e) { throw new HttpError(400, e.message); }
   const f = {
+    budget_phasing: budgetPhasing && JSON.stringify(budgetPhasing),
+    expense_type: oneOf(body.expense_type, recurrence.EXPENSE_TYPES, 'Expenditure type (CAPEX / OPEX)'),
+    recurrence: recur,
+    annual_increase_pct: recur === 'recurrent' && body.annual_increase_pct !== undefined && body.annual_increase_pct !== ''
+      ? num(body.annual_increase_pct, 'Annual increase %', { max: 100 }) : 0,
     department_id: departmentId,
     category_id: Number(body.category_id),
     title: reqString(body.title, 'Title'),
@@ -96,9 +106,9 @@ router.post('/', requireRole(...WRITERS), wrap(async (req, res) => {
   const id = await tx(async conn => {
     const tmp = 'TMP-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
     const [r] = await conn.query(
-      `INSERT INTO requests (ref_no, department_id, sub_unit_id, category_id, title, description, reason, reason_note, tce_excl_vat_mn, vat_pct, funding_source, funding_agency, priority, plan_fy, year_offset, required_date, requested_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [tmp, f.department_id, subUnitId, f.category_id, f.title, f.description, f.reason, f.reason_note, f.tce_excl_vat_mn, f.vat_pct, f.funding_source, f.funding_agency, f.priority, f.plan_fy, f.year_offset, f.required_date, req.user.id]);
+      `INSERT INTO requests (ref_no, department_id, sub_unit_id, category_id, title, description, reason, reason_note, expense_type, recurrence, annual_increase_pct, budget_phasing, tce_excl_vat_mn, vat_pct, funding_source, funding_agency, priority, plan_fy, year_offset, required_date, requested_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [tmp, f.department_id, subUnitId, f.category_id, f.title, f.description, f.reason, f.reason_note, f.expense_type, f.recurrence, f.annual_increase_pct, f.budget_phasing, f.tce_excl_vat_mn, f.vat_pct, f.funding_source, f.funding_agency, f.priority, f.plan_fy, f.year_offset, f.required_date, req.user.id]);
     const [[dept]] = await conn.query('SELECT code FROM departments WHERE id = ?', [f.department_id]);
     const ref = `${dept.code}-${f.plan_fy}-${String(r.insertId).padStart(4, '0')}`;
     await conn.query('UPDATE requests SET ref_no = ? WHERE id = ?', [ref, r.insertId]);
@@ -116,8 +126,8 @@ router.put('/:id', requireRole(...WRITERS), wrap(async (req, res) => {
     ? await resolveSubUnit(req.user, r.department_id, req.body.sub_unit_id === undefined ? r.sub_unit_id : req.body.sub_unit_id)
     : r.sub_unit_id;
   await pool.query(
-    `UPDATE requests SET sub_unit_id=?, category_id=?, title=?, description=?, reason=?, reason_note=?, tce_excl_vat_mn=?, vat_pct=?, funding_source=?, funding_agency=?, priority=?, plan_fy=?, year_offset=?, required_date=? WHERE id=?`,
-    [subUnitId, f.category_id, f.title, f.description, f.reason, f.reason_note, f.tce_excl_vat_mn, f.vat_pct, f.funding_source, f.funding_agency, f.priority, f.plan_fy, f.year_offset, f.required_date, r.id]);
+    `UPDATE requests SET sub_unit_id=?, category_id=?, title=?, description=?, reason=?, reason_note=?, expense_type=?, recurrence=?, annual_increase_pct=?, budget_phasing=?, tce_excl_vat_mn=?, vat_pct=?, funding_source=?, funding_agency=?, priority=?, plan_fy=?, year_offset=?, required_date=? WHERE id=?`,
+    [subUnitId, f.category_id, f.title, f.description, f.reason, f.reason_note, f.expense_type, f.recurrence, f.annual_increase_pct, f.budget_phasing, f.tce_excl_vat_mn, f.vat_pct, f.funding_source, f.funding_agency, f.priority, f.plan_fy, f.year_offset, f.required_date, r.id]);
   await audit(null, 'request', r.id, 'edit', req.user.id, null);
   res.json(await getRequest(r.id));
 }));

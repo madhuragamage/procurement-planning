@@ -3,7 +3,16 @@ import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { Msg, useAction } from '../components/ui.jsx';
-import { fmt } from '../lib/format.js';
+import { fmt, EXPENSE_LABEL } from '../lib/format.js';
+
+const blankLine = { id: null, department_id: '', expense_type: '', category_id: '', amount_mn: '', source: '' };
+const TYPES = [['capex', 'CAPEX'], ['opex', 'OPEX']];
+
+function UseBar({ t }) {
+  if (!t.allocated) return t.committed ? <span className="pill bad">no allocation</span> : <span className="hint">—</span>;
+  const pct = Math.min(100, (t.committed / t.allocated) * 100);
+  return <div className={'bar' + (t.over_budget ? ' over' : '')} title={`${pct.toFixed(0)}% used`}><div style={{ width: pct + '%' }}></div></div>;
+}
 
 export default function BudgetsPage() {
   const { user } = useAuth();
@@ -12,7 +21,7 @@ export default function BudgetsPage() {
   const [avail, setAvail] = useState([]);
   const [lines, setLines] = useState([]);
   const [open, setOpen] = useState(null);
-  const [f, setF] = useState({ id: null, department_id: '', category_id: '', amount_mn: '', source: '' });
+  const [f, setF] = useState(blankLine);
   const { busy, error, ok, run } = useAction();
   const canEdit = ['procurement', 'management', 'admin'].includes(user.role);
 
@@ -27,8 +36,16 @@ export default function BudgetsPage() {
     e.preventDefault();
     const body = { ...f, year };
     const out = await run(() => f.id ? api.put('/budgets/' + f.id, body) : api.post('/budgets', body), 'Budget line saved.');
-    if (out) { setF({ id: null, department_id: '', category_id: '', amount_mn: '', source: '' }); load(); }
+    if (out) { setF(blankLine); load(); }
   }
+
+  const total = key => TYPES.reduce((o, [k]) => ({ ...o, [k]: avail.reduce((s, a) => s + a[k][key], 0) }), {});
+  const alloc = total('allocated'), comm = total('committed');
+  const num = { textAlign: 'right' };
+  const cells = t => <>
+    <td style={num}>{fmt(t.allocated)}</td><td style={num}>{fmt(t.committed)}</td><td style={num}>{fmt(t.pipeline)}</td>
+    <td style={num} className={t.over_budget ? 'phaseA' : ''}>{fmt(t.remaining)}</td><td><UseBar t={t} /></td>
+  </>;
 
   return (
     <div>
@@ -36,29 +53,40 @@ export default function BudgetsPage() {
         <h2 style={{ margin: 0 }}>Budget availability</h2>
         <label style={{ fontSize: 12, color: 'var(--muted)' }}>Budget year <input type="number" value={year} onChange={e => setYear(Number(e.target.value))} style={{ width: 90, display: 'inline-block' }} /></label>
       </div>
-      <p className="hint">Committed = plan items (incl. VAT) that fall in this budget year (cycle year + year offset), excluding cancelled items. Pipeline = authorised requests that have not been given a method yet. Enter either a department total or per-category lines, not both, to avoid double counting.</p>
+      <p className="hint">CAPEX and OPEX are separate allocations; each is compared only with plan items of the same type. Committed = plan items (incl. VAT) that fall in this budget year (cycle year + year offset), excluding cancelled items. Pipeline = authorised requests not yet planned (a recurrent request also counts in each later year, with its yearly increase). Enter either a department total or per-category lines for each type, not both, to avoid double counting.</p>
       <Msg error={error} ok={ok} />
+
+      <div className="grid g4" style={{ marginBottom: 14 }}>
+        {TYPES.map(([k, l]) => (
+          <Fragment key={k}>
+            <div className="stat"><div className="v">{fmt(alloc[k])}</div><div className="l">{l} allocated {year} · LKR Mn</div></div>
+            <div className={'stat' + (comm[k] > alloc[k] + 1e-9 ? ' bad' : '')}><div className="v">{fmt(alloc[k] - comm[k])}</div><div className="l">{l} remaining · committed {fmt(comm[k])}</div></div>
+          </Fragment>
+        ))}
+      </div>
 
       <div className="card">
         {avail.length === 0 ? <div className="empty">No budget lines or plan items for {year}.</div> : (
           <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
-            <thead><tr><th>Department</th><th style={{ textAlign: 'right' }}>Allocated</th><th style={{ textAlign: 'right' }}>Committed</th><th style={{ textAlign: 'right' }}>Pipeline</th><th style={{ textAlign: 'right' }}>Remaining</th><th>Use</th></tr></thead>
-            <tbody>{avail.map(a => {
-              const pct = a.allocated ? Math.min(100, (a.committed / a.allocated) * 100) : 0;
-              return (
-                <Fragment key={a.department_id}>
-                  <tr><td><button className="link" onClick={() => setOpen(open === a.department_id ? null : a.department_id)}>{a.department}</button></td>
-                    <td style={{ textAlign: 'right' }}>{fmt(a.allocated)}</td><td style={{ textAlign: 'right' }}>{fmt(a.committed)}</td><td style={{ textAlign: 'right' }}>{fmt(a.pipeline)}</td>
-                    <td style={{ textAlign: 'right' }} className={a.over_budget ? 'phaseA' : ''}>{fmt(a.remaining)}</td>
-                    <td>{a.allocated ? <div className={'bar' + (a.over_budget ? ' over' : '')}><div style={{ width: pct + '%' }}></div></div> : <span className="hint">no allocation</span>}{a.over_budget && <span className="pill bad" style={{ marginLeft: 6 }}>over</span>}</td></tr>
-                  {open === a.department_id && a.categories.map(c => (
-                    <tr key={c.category_id} style={{ background: 'var(--panel-2)' }}><td style={{ paddingLeft: 26 }}>{c.category}</td>
-                      <td style={{ textAlign: 'right' }}>{fmt(c.allocated)}</td><td style={{ textAlign: 'right' }}>{fmt(c.committed)}</td><td style={{ textAlign: 'right' }}>{fmt(c.pipeline)}</td>
-                      <td style={{ textAlign: 'right' }}>{c.remaining == null ? '—' : fmt(c.remaining)}</td><td>{c.over_budget && <span className="pill bad">over</span>}</td></tr>
-                  ))}
-                </Fragment>
-              );
-            })}</tbody>
+            <thead>
+              <tr><th rowSpan={2}>Department</th><th colSpan={5} style={{ textAlign: 'center', borderLeft: '1px solid var(--line)' }}>CAPEX</th><th colSpan={5} style={{ textAlign: 'center', borderLeft: '1px solid var(--line)' }}>OPEX</th></tr>
+              <tr>{TYPES.map(([k]) => <Fragment key={k}><th style={{ ...num, borderLeft: '1px solid var(--line)' }}>Allocated</th><th style={num}>Committed</th><th style={num}>Pipeline</th><th style={num}>Remaining</th><th>Use</th></Fragment>)}</tr>
+            </thead>
+            <tbody>{avail.map(a => (
+              <Fragment key={a.department_id}>
+                <tr><td><button className="link" onClick={() => setOpen(open === a.department_id ? null : a.department_id)}>{a.department}</button>{a.over_budget && <span className="pill bad" style={{ marginLeft: 6 }}>over</span>}</td>
+                  {cells(a.capex)}{cells(a.opex)}</tr>
+                {open === a.department_id && (a.categories.length === 0
+                  ? <tr style={{ background: 'var(--panel-2)' }}><td colSpan={11} className="hint" style={{ paddingLeft: 26 }}>No category-level figures.</td></tr>
+                  : a.categories.map(c => (
+                    <tr key={c.expense_type + c.category_id} style={{ background: 'var(--panel-2)' }}><td style={{ paddingLeft: 26 }}>{c.category}</td>
+                      {TYPES.map(([k, l]) => <Fragment key={k}>{c.expense_type === l ? <>
+                        <td style={num}>{fmt(c.allocated)}</td><td style={num}>{fmt(c.committed)}</td><td style={num}>{fmt(c.pipeline)}</td><td style={num}>{c.remaining == null ? '—' : fmt(c.remaining)}</td><td>{c.over_budget && <span className="pill bad">over</span>}</td>
+                      </> : <><td></td><td></td><td></td><td></td><td></td></>}</Fragment>)}
+                    </tr>
+                  )))}
+              </Fragment>
+            ))}</tbody>
           </table></div>
         )}
       </div>
@@ -71,25 +99,29 @@ export default function BudgetsPage() {
               <select value={f.department_id} onChange={e => setF({ ...f, department_id: e.target.value })} required>
                 <option value="">Select…</option>{lookups.departments.filter(d => d.active).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select></label>
+            <label className="field"><span>CAPEX / OPEX</span>
+              <select value={f.expense_type} onChange={e => setF({ ...f, expense_type: e.target.value })} required>
+                <option value="">Select…</option>{lookups.expenseTypes.map(x => <option key={x} value={x}>{EXPENSE_LABEL[x]}</option>)}
+              </select></label>
             <label className="field"><span>Category (optional)</span>
               <select value={f.category_id || ''} onChange={e => setF({ ...f, category_id: e.target.value })}>
                 <option value="">Whole department</option>{lookups.categories.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select></label>
             <label className="field"><span>Amount (LKR Mn)</span><input type="number" step="any" min="0" value={f.amount_mn} onChange={e => setF({ ...f, amount_mn: e.target.value })} required /></label>
-            <label className="field"><span>Source</span><input type="text" value={f.source || ''} onChange={e => setF({ ...f, source: e.target.value })} placeholder="e.g. Approved budget" /></label>
           </div>
+          <label className="field"><span>Source</span><input type="text" value={f.source || ''} onChange={e => setF({ ...f, source: e.target.value })} placeholder="e.g. Approved budget" /></label>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="primary" disabled={busy}>{f.id ? 'Update line' : 'Add allocation'}</button>
-            {f.id && <button type="button" className="ghost" onClick={() => setF({ id: null, department_id: '', category_id: '', amount_mn: '', source: '' })}>Cancel edit</button>}
+            {f.id && <button type="button" className="ghost" onClick={() => setF(blankLine)}>Cancel edit</button>}
           </div>
         </form>
       )}
       <div className="card">
         {lines.length === 0 ? <div className="empty">No allocations entered.</div> : (
           <div className="tbl-wrap"><table>
-            <thead><tr><th>Department</th><th>Category</th><th style={{ textAlign: 'right' }}>Amount (Mn)</th><th>Source</th><th></th></tr></thead>
+            <thead><tr><th>Department</th><th>Type</th><th>Category</th><th style={{ textAlign: 'right' }}>Amount (Mn)</th><th>Source</th><th></th></tr></thead>
             <tbody>{lines.map(l => (
-              <tr key={l.id}><td>{l.department}</td><td>{l.category || 'Whole department'}</td><td style={{ textAlign: 'right' }}>{fmt(l.amount_mn)}</td><td>{l.source}</td>
+              <tr key={l.id}><td>{l.department}</td><td>{l.expense_type}</td><td>{l.category || 'Whole department'}</td><td style={{ textAlign: 'right' }}>{fmt(l.amount_mn)}</td><td>{l.source}</td>
                 <td style={{ display: 'flex', gap: 6 }}>{canEdit && <>
                   <button className="mini plain" onClick={() => setF({ ...l, category_id: l.category_id || '' })}>edit</button>
                   <button className="mini" onClick={async () => { if (confirm('Delete this allocation?')) { await run(() => api.del('/budgets/' + l.id)); load(); } }}>delete</button></>}</td></tr>

@@ -3,14 +3,15 @@ const pool = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { wrap, HttpError, optString, audit, tx, isWide, inScope } = require('../util');
 const lib = require('../planLib');
+const bids = require('../bids');
 
 const router = express.Router();
 const PROC = ['procurement', 'admin'];
 
 const SELECT = `
   SELECT e.*, u.name AS requested_by_name, dcd.name AS decided_by_name,
-         i.title, i.plan_fy, i.year_offset, i.method, i.procurement_start, i.expected_delivery, i.tce_excl_vat_mn, i.vat_pct,
-         r.ref_no, r.department_id, r.sub_unit_id, d.name AS department, su.name AS sub_unit
+         i.title, i.plan_fy, i.year_offset, i.method, i.bid_no, i.bid_type, i.procurement_start, i.expected_delivery, i.tce_excl_vat_mn, i.vat_pct,
+         ${lib.ITEM_REF} AS ref_no, r.department_id, r.sub_unit_id, d.name AS department, su.name AS sub_unit
   FROM execution_requests e
   JOIN plan_items i ON i.id = e.plan_item_id
   JOIN requests r ON r.id = i.request_id
@@ -47,7 +48,8 @@ router.post('/', requireRole('requester', 'dept_head', ...PROC), wrap(async (req
       'INSERT INTO execution_requests (plan_item_id, requested_by, note, on_behalf, status, decided_by, decided_at) VALUES (?,?,?,?,?,?,?)',
       [itemId, req.user.id, note, onBehalf ? 1 : 0, onBehalf ? 'accepted' : 'pending', onBehalf ? req.user.id : null, onBehalf ? new Date() : null]);
     await conn.query('UPDATE plan_items SET exec_status = ? WHERE id = ?', [onBehalf ? 'accepted' : 'requested', itemId]);
-    await audit(conn, 'plan_item', itemId, onBehalf ? 'execution-started' : 'execution-requested', req.user.id, note);
+    const bidNo = onBehalf ? await bids.assign(conn, itemId, req.body.bid_type) : null;
+    await audit(conn, 'plan_item', itemId, onBehalf ? 'execution-started' : 'execution-requested', req.user.id, [bidNo && `bid ${bidNo}`, note].filter(Boolean).join(' — ') || null);
     return ins.insertId;
   });
   const [[row]] = await pool.query(`${SELECT} WHERE e.id = ?`, [id]);
@@ -63,10 +65,26 @@ async function decide(req, res, { to, action, needsComment }) {
     if (e.status !== 'pending') throw new HttpError(409, 'That request has already been decided.');
     await conn.query('UPDATE execution_requests SET status = ?, decided_by = ?, decided_at = NOW(), decision_comment = ? WHERE id = ?', [to, req.user.id, comment, e.id]);
     await conn.query('UPDATE plan_items SET exec_status = ? WHERE id = ?', [to, e.plan_item_id]);
-    await audit(conn, 'plan_item', e.plan_item_id, action, req.user.id, comment);
-  });
-  res.json({ ok: true });
+    // Starting execution classes the procurement as a tender or quotation and gives it its bid number.
+    const bidNo = to === 'accepted' ? await bids.assign(conn, e.plan_item_id, req.body.bid_type) : null;
+    await audit(conn, 'plan_item', e.plan_item_id, action, req.user.id, [bidNo && `bid ${bidNo}`, comment].filter(Boolean).join(' — ') || null);
+    return bidNo;
+  }).then(bidNo => res.json({ ok: true, bid_no: bidNo }));
 }
+
+// Bid number for an item whose execution was accepted before bid numbers existed.
+router.post('/bid-number/:itemId', requireRole(...PROC), wrap(async (req, res) => {
+  const bidNo = await tx(async conn => {
+    const [[it]] = await conn.query('SELECT exec_status, bid_no FROM plan_items WHERE id = ?', [Number(req.params.itemId)]);
+    if (!it) throw new HttpError(404, 'Plan item not found.');
+    if (it.exec_status !== 'accepted') throw new HttpError(409, 'A bid number is given when execution is accepted.');
+    if (it.bid_no) throw new HttpError(409, `This procurement already has bid number ${it.bid_no}.`);
+    const no = await bids.assign(conn, Number(req.params.itemId), req.body.bid_type);
+    await audit(conn, 'plan_item', req.params.itemId, 'bid-number', req.user.id, no);
+    return no;
+  });
+  res.json({ ok: true, bid_no: bidNo });
+}));
 
 router.post('/:id/accept', requireRole(...PROC), wrap((req, res) => decide(req, res, { to: 'accepted', action: 'execution-accepted' })));
 router.post('/:id/return', requireRole(...PROC), wrap((req, res) => decide(req, res, { to: 'returned', action: 'execution-returned', needsComment: true })));

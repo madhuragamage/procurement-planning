@@ -26,7 +26,7 @@ function Users() {
   return (
     <div className="card">
       <h2>Users</h2>
-      <p className="hint">Each user belongs to a department and optionally to one of its sub units. A department user <b>with a sub unit</b> submits and sees only that sub unit's requests; one without sees the whole department. Department heads authorise requests for their department and all its sub units. The Board / CEO role is read-only.</p>
+      <p className="hint">Each user belongs to a department and optionally to one of its sub units. A department user <b>with a sub unit</b> submits and sees only that sub unit's requests; one without sees the whole department. Department heads authorise requests for their department and all its sub units. The Board / CEO role is read-only. <b>Supplies Unit</b> users handle the procurement files forwarded after award; the head of the Supplies department (set under Limits, reminders &amp; organisation) can view their work.</p>
       <Msg error={error} ok={ok} />
       <form onSubmit={create} className="grid g4" style={{ alignItems: 'end' }}>
         <label className="field"><span>Name</span><input type="text" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} required /></label>
@@ -152,6 +152,40 @@ function Categories() {
   );
 }
 
+const SUPPLIES_PERIODS = [
+  ['pb_days', 'Performance Bond due (days after notifying the supplier)'], ['pi_days', 'Proforma invoice due (days after notifying)'],
+  ['reminder_interval_days', 'Repeat supplier reminders every (days)'], ['bond_notice_days', 'Bond expiry notice (days before expiry)'],
+  ['pb_validity_extra_days', 'Performance Bond validity (days after delivery)'], ['contract_agreement_days', 'Contract agreement due (days after award)']
+];
+
+function SuppliesSettings() {
+  const { lookups, reload } = useApp();
+  const [dept, setDept] = useState(lookups.suppliesUnit.department_id || '');
+  const [periods, setPeriods] = useState(null);
+  const { busy, error, ok, run } = useAction();
+  useEffect(() => { api.get('/supplies/settings').then(setPeriods).catch(() => {}); }, []);
+  const heads = lookups.departments.find(d => d.id === Number(dept));
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <h2>Supplies Unit</h2>
+      <p className="hint">Users with the role "Supplies Unit" handle the files forwarded after award. The head (Department head role) of the department chosen here can view the whole Supplies function, read-only.</p>
+      <Msg error={error} ok={ok} />
+      <label className="field"><span>Supplies department</span>
+        <select value={dept} onChange={e => setDept(e.target.value)}>
+          <option value="">— not set —</option>{lookups.departments.filter(d => d.active).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select></label>
+      <button className="primary" disabled={busy} onClick={async () => { if (await run(() => api.put('/lookups/supplies-unit', { department_id: dept || null }), heads ? `Heads of ${heads.name} can now view Supplies.` : 'Cleared.')) reload(); }}>Save</button>
+      {periods && <>
+        <div className="section-title">Supplies time periods</div>
+        <div className="grid g2">{SUPPLIES_PERIODS.map(([k, l]) => (
+          <label className="field" key={k}><span>{l}</span><input type="number" min="1" max="365" value={periods[k]} onChange={e => setPeriods({ ...periods, [k]: e.target.value })} /></label>
+        ))}</div>
+        <button className="primary" disabled={busy} onClick={() => run(() => api.put('/supplies/settings', periods), 'Supplies time periods saved.')}>Save periods</button>
+      </>}
+    </div>
+  );
+}
+
 function Settings() {
   const { lookups, reload } = useApp();
   const [text, setText] = useState(JSON.stringify(lookups.limits, null, 2));
@@ -182,6 +216,7 @@ function Settings() {
           <label className="field"><span>Reminder lead time (days)</span><input type="number" min="1" max="365" value={lead} onChange={e => setLead(e.target.value)} /></label>
           <button className="primary" disabled={busy} onClick={async () => { await run(() => api.put('/lookups/reminders', { lead_days: Number(lead) }), 'Reminder lead time saved.'); reload(); }}>Save</button>
         </div>
+        <SuppliesSettings />
         <div className="card">
           <h2>Organisation</h2>
           <label className="field"><span>Name shown on reports</span><input type="text" value={org} onChange={e => setOrg(e.target.value)} /></label>

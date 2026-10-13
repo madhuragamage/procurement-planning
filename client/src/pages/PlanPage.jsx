@@ -5,7 +5,12 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import ItemForm from '../components/ItemForm.jsx';
 import { Status, Msg, useAction, CommentAction } from '../components/ui.jsx';
-import { fmt, YEAR_LABELS, label, FUNDING_LABEL } from '../lib/format.js';
+import { fmt, YEAR_LABELS, label, FUNDING_LABEL, suggestBidType } from '../lib/format.js';
+
+function RecurPill({ it }) {
+  if (it.recurrence !== 'recurrent') return null;
+  return <span className="pill warn" style={{ marginLeft: 6 }} title={`Recurrent annually, +${Number(it.annual_increase_pct)}% per year`}>{it.recur_index > 0 ? `recurrent, repeat ${it.recur_index}` : 'recurrent'}</span>;
+}
 
 function FullPlanPage() {
   const { user } = useAuth();
@@ -29,7 +34,17 @@ function FullPlanPage() {
   const isProc = ['procurement', 'admin'].includes(user.role);
   const act = (path, msg) => async comment => { await run(() => api.post(`/plans/${fy}/${path}`, { comment }), msg); load(); };
   const tracking = ['approved', 'frozen'].includes(plan.status);
-  const startNow = async it => { await run(() => api.post('/execution-requests', { plan_item_id: it.id, note: 'Started by the procurement unit' }), `${it.ref_no}: execution started.`); load(); };
+  // Starting execution needs the tender / quotation class, which creates the bid number.
+  const startNow = async it => {
+    let type = suggestBidType(it.method);
+    const answer = window.prompt(`Start execution of ${it.ref_no}. Procure by tender (T) or quotation (Q)?`, type === 'quotation' ? 'Q' : type === 'tender' ? 'T' : '');
+    if (answer === null) return;
+    type = /^q/i.test(answer.trim()) ? 'quotation' : /^t/i.test(answer.trim()) ? 'tender' : '';
+    if (!type) { window.alert('Enter T for tender or Q for quotation.'); return; }
+    const out = await run(() => api.post('/execution-requests', { plan_item_id: it.id, note: 'Started by the procurement unit', bid_type: type }), `${it.ref_no}: execution started.`);
+    if (out && out.bid_no) window.alert(`${it.ref_no}: bid number ${out.bid_no}`);
+    load();
+  };
   const grandTotal = info.summary.reduce((s, y) => s + y.tce_incl_vat_mn, 0);
 
   return (
@@ -97,10 +112,10 @@ function FullPlanPage() {
             <div className="card">
               {list.length === 0 ? <div className="empty">No items.</div> : (
                 <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
-                  <thead><tr><th>Ref</th><th>Description</th><th>Department</th><th>Category</th><th>Method</th><th>Committee</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Start</th><th>Delivery</th><th>Checks</th><th>Execution</th><th></th></tr></thead>
+                  <thead><tr><th>Ref</th><th>Description</th><th>Department</th><th>Category</th><th>Type</th><th>Method</th><th>Committee</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Start</th><th>Delivery</th><th>Checks</th><th>Execution</th><th></th></tr></thead>
                   <tbody>{list.map(it => (
                     <tr key={it.id}>
-                      <td>{it.ref_no}</td><td className="wrap">{it.title}</td><td>{it.department}</td><td>{it.category}</td>
+                      <td>{it.bid_no ? <><b>{it.bid_no}</b><div className="hint" style={{ margin: 0 }}>{it.ref_no}</div></> : it.ref_no}</td><td className="wrap">{it.title}<RecurPill it={it} /></td><td>{it.department}</td><td>{it.category}</td><td>{it.expense_type}</td>
                       <td>{it.method || <span className="pill bad">none</span>}</td><td>{it.committee_level}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(it.tce_incl_vat_mn)}</td><td>{it.procurement_start}</td><td>{it.expected_delivery}</td>
                       <td title={it.checks.warnings.join('\n')}>{it.checks.warnings.length ? <span className="pill warn">{it.checks.warnings.length} warning{it.checks.warnings.length > 1 ? 's' : ''}</span> : <span className="pill ok">ok</span>}</td>
@@ -108,7 +123,7 @@ function FullPlanPage() {
                       <td style={{ display: 'flex', gap: 6 }}>
                         {canEdit ? <>
                           <button className="mini plain" onClick={() => { setEditing(it); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>edit</button>
-                          <button className="mini" disabled={busy} onClick={async () => { if (confirm(`Remove ${it.ref_no} from the plan? The request stays authorised.`)) { await run(() => api.del('/plan-items/' + it.id)); load(); } }}>remove</button>
+                          <button className="mini" disabled={busy} onClick={async () => { if (confirm(`Remove ${it.ref_no} from the plan?${it.recurrence === 'recurrent' && it.recur_index === 0 ? ' Its recurrent repeats in later years are removed too.' : ''} The request stays authorised.`)) { await run(() => api.del('/plan-items/' + it.id)); load(); } }}>remove</button>
                         </> : <span className="hint" style={{ margin: 0 }}>locked</span>}
                       </td>
                     </tr>
@@ -154,21 +169,78 @@ function FullPlanPage() {
   );
 }
 
+const CHANGE_STATE = c => c.status === 'submitted' ? ['awaiting department head', 'warn']
+  : c.status === 'pending' ? ['authorised — with the procurement unit', 'warn']
+  : c.status === 'returned' ? [`returned by ${c.decided_by_name || 'reviewer'}`, 'bad']
+  : c.revision_status === 'approved' ? [`approved in revision #${c.revision_id}`, 'ok']
+  : c.revision_status === 'rejected' ? [`rejected by management (revision #${c.revision_id})`, 'bad']
+  : c.revision_status === 'submitted' ? [`awaiting management (revision #${c.revision_id})`, 'warn']
+  : [`in draft revision #${c.revision_id}`, 'warn'];
+
+// A department asks for one of its approved items to be modified or cancelled through a plan revision.
+function ChangeRequestForm({ item, fy, onDone, onCancel }) {
+  const { user } = useAuth();
+  const [action, setAction] = useState('modify');
+  const [p, setP] = useState({ tce_excl_vat_mn: '', year_offset: '', procurement_start: '', expected_delivery: '', remarks: '' });
+  const [reason, setReason] = useState('');
+  const { busy, error, run } = useAction();
+  const set = (k, v) => setP(x => ({ ...x, [k]: v }));
+  async function send(e) {
+    e.preventDefault();
+    const payload = Object.fromEntries(Object.entries(p).filter(([, v]) => v !== ''));
+    if (await run(() => api.post('/change-requests', { plan_item_id: item.id, action, reason, payload: action === 'modify' ? payload : undefined }))) {
+      onDone(`${item.ref_no}: ${action === 'cancel' ? 'cancellation' : 'modification'} request sent to ${user.role === 'dept_head' ? 'the procurement unit' : 'your department head for authorisation'}.`);
+    }
+  }
+  return (
+    <form className="card" onSubmit={send} style={{ marginBottom: 14, borderColor: 'var(--accent-2)' }}>
+      <h2>Request a change — {item.ref_no} {item.title}</h2>
+      <p className="hint">The approved plan can only change through a plan revision. {user.role === 'dept_head' ? 'As department head, your request goes straight to the procurement unit' : 'Your department head authorises the request first; it then goes to the procurement unit'}, which adds it to a revision for management approval (or returns it with a comment).</p>
+      <Msg error={error} />
+      <div className="grid g4">
+        <label className="field"><span>Request</span>
+          <select value={action} onChange={e => setAction(e.target.value)}><option value="modify">Modify this item</option><option value="cancel">Cancel this item</option></select></label>
+      </div>
+      {action === 'modify' && (
+        <div className="grid g4">
+          <label className="field"><span>New cost excl. VAT (LKR Mn)</span><input type="number" step="any" min="0" value={p.tce_excl_vat_mn} placeholder={`now ${item.tce_excl_vat_mn}`} onChange={e => set('tce_excl_vat_mn', e.target.value)} /></label>
+          <label className="field"><span>Move to plan year</span>
+            <select value={p.year_offset} onChange={e => set('year_offset', e.target.value)}><option value="">keep ({YEAR_LABELS(fy)[item.year_offset]})</option>{YEAR_LABELS(fy).map((l, i) => i !== item.year_offset && <option key={i} value={i}>{l}</option>)}</select></label>
+          <label className="field"><span>New procurement start</span><input type="date" value={p.procurement_start} onChange={e => set('procurement_start', e.target.value)} /></label>
+          <label className="field"><span>New expected delivery</span><input type="date" value={p.expected_delivery} onChange={e => set('expected_delivery', e.target.value)} /></label>
+        </div>
+      )}
+      {action === 'modify' && <label className="field"><span>Other change / remarks</span><input type="text" value={p.remarks} onChange={e => set('remarks', e.target.value)} placeholder="e.g. revised scope or quantity" /></label>}
+      <label className="field"><span>Reason (required)</span><input type="text" value={reason} onChange={e => setReason(e.target.value)} required /></label>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <button className="primary" disabled={busy}>Send request</button>
+        <button type="button" className="ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
 // Department users see only their own unit's items, and only after management approves the plan.
 function DepartmentPlan() {
   const { user } = useAuth();
   const { fy, lookups } = useApp();
   const [info, setInfo] = useState(null);
   const [items, setItems] = useState([]);
-  const { busy, error, ok, run } = useAction();
+  const [changes, setChanges] = useState([]);
+  const [changing, setChanging] = useState(null);
+  const { busy, error, ok, run, setOk } = useAction();
   const today = new Date().toISOString().slice(0, 10);
   const soon = new Date(Date.now() + lookups.reminders.lead_days * 86400000).toISOString().slice(0, 10);
 
   const load = useCallback(async () => {
     const i = await api.get('/plans/' + fy);
     setInfo(i);
-    setItems(['approved', 'frozen'].includes(i.plan.status) ? await api.get('/plan-items?plan_fy=' + fy) : []);
+    const approvedPlan = ['approved', 'frozen'].includes(i.plan.status);
+    setItems(approvedPlan ? await api.get('/plan-items?plan_fy=' + fy) : []);
+    setChanges(approvedPlan ? await api.get('/change-requests?plan_fy=' + fy) : []);
   }, [fy]);
+  // Items with a change request still open (with procurement, or in a revision not yet decided).
+  const openChange = id => changes.some(c => c.plan_item_id === id && (['submitted', 'pending'].includes(c.status) || (c.status === 'included' && ['draft', 'submitted'].includes(c.revision_status))));
   useEffect(() => { setInfo(null); load(); }, [load]);
 
   if (!info) return <div className="loading"><span className="spinner"></span> Loading…</div>;
@@ -194,7 +266,8 @@ function DepartmentPlan() {
         <div className="card"><div className="empty">The {fy} plan has not been approved by management yet. Your unit's items appear here once it is.</div></div>
       ) : (
         <>
-          <p className="hint">When a procurement's planned start date approaches, send an <b>execution request</b> so the procurement unit can begin. Approval in the plan does not start procurement by itself.</p>
+          <p className="hint">When a procurement's planned start date approaches, send an <b>execution request</b> so the procurement unit can begin. Approval in the plan does not start procurement by itself. To change or cancel an item, use <b>request change</b>.</p>
+          {changing && <ChangeRequestForm item={changing} fy={fy} onCancel={() => setChanging(null)} onDone={msg => { setChanging(null); setOk(msg); load(); }} />}
           {[0, 1, 2].map(o => {
             const list = items.filter(i => i.year_offset === o && i.status !== 'cancelled');
             return (
@@ -203,17 +276,21 @@ function DepartmentPlan() {
                 <div className="card">
                   {list.length === 0 ? <div className="empty">No items for your unit.</div> : (
                     <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
-                      <thead><tr><th>Ref</th><th>Description</th><th>Unit</th><th>Reason</th><th>Method</th><th>Funding</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Planned start</th><th>Delivery</th><th>Status</th><th>Execution</th><th></th></tr></thead>
+                      <thead><tr><th>Ref</th><th>Description</th><th>Unit</th><th>Type</th><th>Reason</th><th>Method</th><th>Funding</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Planned start</th><th>Delivery</th><th>Status</th><th>Execution</th><th></th></tr></thead>
                       <tbody>{list.map(it => {
                         const near = it.status === 'planned' && it.procurement_start && it.procurement_start <= soon && ['not_requested', 'returned'].includes(it.exec_status);
                         const canRequest = it.status === 'planned' && ['not_requested', 'returned'].includes(it.exec_status);
                         return (
                           <tr key={it.id}>
-                            <td>{it.ref_no}</td><td className="wrap">{it.title}</td><td>{it.sub_unit || it.department}</td><td>{it.reason}</td><td>{it.method}</td><td>{FUNDING_LABEL[it.funding_source]}</td>
+                            <td>{it.ref_no}</td><td className="wrap">{it.title}<RecurPill it={it} /></td><td>{it.sub_unit || it.department}</td><td>{it.expense_type}</td><td>{it.reason}</td><td>{it.method}</td><td>{FUNDING_LABEL[it.funding_source]}</td>
                             <td style={{ textAlign: 'right' }}>{fmt(it.tce_incl_vat_mn)}</td>
                             <td>{it.procurement_start}{near && <span className={'pill ' + (it.procurement_start < today ? 'bad' : 'warn')} style={{ marginLeft: 6 }}>{it.procurement_start < today ? 'due' : 'soon'}</span>}</td>
                             <td>{it.expected_delivery}</td><td><Status value={it.status} /></td><td><Status value={it.exec_status} /></td>
-                            <td>{canRequest && <button className={near ? 'primary' : 'mini plain'} style={near ? { padding: '5px 10px', fontSize: 12 } : undefined} disabled={busy} onClick={() => request(it)}>request execution</button>}</td>
+                            <td style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {canRequest && <button className={near ? 'primary' : 'mini plain'} style={near ? { padding: '5px 10px', fontSize: 12 } : undefined} disabled={busy} onClick={() => request(it)}>request execution</button>}
+                              {openChange(it.id) ? <span className="pill warn">change requested</span>
+                                : <button className="mini plain" onClick={() => { setChanging(it); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>request change</button>}
+                            </td>
                           </tr>
                         );
                       })}</tbody>
@@ -223,6 +300,23 @@ function DepartmentPlan() {
               </div>
             );
           })}
+
+          <div className="section-title">Your change requests</div>
+          <div className="card">
+            {changes.length === 0 ? <div className="empty">No modification or cancellation requests yet.</div> : (
+              <div className="tbl-wrap"><table>
+                <thead><tr><th>Ref</th><th>Description</th><th>Request</th><th>Proposed</th><th>Reason</th><th>Sent</th><th>Status</th><th>Comment</th></tr></thead>
+                <tbody>{changes.map(c => {
+                  const [txt, cls] = CHANGE_STATE(c);
+                  return (
+                    <tr key={c.id}><td>{c.ref_no}</td><td className="wrap">{c.title}</td><td>{c.action === 'cancel' ? 'cancellation' : 'modification'}</td>
+                      <td className="wrap">{Object.entries(c.payload || {}).map(([k, v]) => `${label(k)}: ${v}`).join('; ')}</td><td className="wrap">{c.reason}</td>
+                      <td>{c.created_at.slice(0, 10)}</td><td><span className={'pill ' + cls}>{txt}</span></td><td className="wrap">{c.decision_comment || ''}</td></tr>
+                  );
+                })}</tbody>
+              </table></div>
+            )}
+          </div>
         </>
       )}
     </div>

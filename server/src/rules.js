@@ -170,6 +170,85 @@ function buildSchedule({ start, delivery, method, tceInclMn }) {
   return out;
 }
 
+// Days from the previous milestone to each milestone under the standard (auto) schedule - the same lead
+// times buildSchedule uses. The first milestone is counted from the procurement start. Completion is the
+// delivery period after signing: up to the expected delivery date if one is given, else the planning default.
+function milestoneGaps({ method, tceInclMn, manualType, start, delivery }) {
+  const bid = minBiddingDays(method, tceInclMn) || 14;
+  const half = Math.floor(bid / 2);
+  const gaps = {
+    appoint_pc: DEFAULT_LEADS.appoint_pc, appoint_bec: DEFAULT_LEADS.appoint_bec - DEFAULT_LEADS.appoint_pc,
+    prep_docs: DEFAULT_LEADS.prep_docs - DEFAULT_LEADS.appoint_bec, approve_docs: DEFAULT_LEADS.approve_docs - DEFAULT_LEADS.prep_docs,
+    invitation: DEFAULT_LEADS.invitation - DEFAULT_LEADS.approve_docs, clarification: half, opening: bid - half,
+    evaluation: 21, determination: 7, approve_award: 7, contract_award: 7, signing: 14
+  };
+  const toSigning = Object.values(gaps).reduce((s, d) => s + d, 0);
+  const fromDelivery = start && delivery ? diffDays(addDays(start, toSigning), delivery) : null;
+  gaps.completion = fromDelivery != null && fromDelivery > 0 ? fromDelivery : deliveryDays(manualType, tceInclMn, method);
+  return gaps;
+}
+
+// Milestone dates from a start date and the weeks allowed for each milestone (counted from the previous
+// one). Weeks may be fractional (0.5 = 3.5 days, rounded to whole days).
+function scheduleFromWeeks(start, weeks) {
+  const out = {};
+  let days = 0;
+  for (const m of MILESTONES) {
+    days += Math.round((Number(weeks[m.key]) || 0) * 7);
+    out[m.key] = addDays(start, days);
+  }
+  return out;
+}
+
+// Planning defaults (not Manual values) for the time from contract signing to delivery / completion,
+// by category type and value band [upper bound LKR Mn incl. VAT, days]. Adjust to LECO experience.
+const DELIVERY_DAYS = {
+  goods: [[10, 45], [50, 60], [250, 90], [null, 120]],
+  works: [[10, 90], [50, 120], [250, 180], [null, 365]],
+  services: [[10, 30], [50, 30], [250, 45], [null, 60]]
+};
+const INTERNATIONAL_EXTRA_DAYS = 60; // shipping and clearing for ICB / international shopping
+const PREQUALIFICATION_DAYS = 42;    // a prequalification round before bidding
+
+function deliveryDays(manualType, tceInclMn, method) {
+  const bands = DELIVERY_DAYS[manualType] || DELIVERY_DAYS.goods;
+  const days = bands.find(b => b[0] === null || tceInclMn <= b[0])[1];
+  const intl = methodFamily(method) === 'ICB' || method === 'Shopping-International';
+  return days + (intl && manualType !== 'works' ? INTERNATIONAL_EXTRA_DAYS : 0);
+}
+
+// How to set the procurement start and expected delivery for a request: work back from the date the
+// department needs it by the procurement steps (same lead times as buildSchedule) and a delivery period.
+// If that start date has already passed, start today and give the earliest achievable delivery instead.
+function dateGuidance({ requiredDate, method, tceInclMn, manualType, prequalification, today }) {
+  const bid = minBiddingDays(method, tceInclMn) || 14;
+  const steps = [
+    { label: 'Committee appointment, specifications and approval of bidding documents', days: DEFAULT_LEADS.invitation },
+    ...(prequalification ? [{ label: 'Prequalification (Annex VIII)', days: PREQUALIFICATION_DAYS }] : []),
+    { label: `Bidding period${minBiddingDays(method, tceInclMn) ? ' (Section 6.3 minimum)' : ' (planning default)'}`, days: bid },
+    { label: 'Evaluation, determination and approval of award', days: 21 + 7 + 7 },
+    { label: 'Contract award and signing', days: 7 + 14 },
+    { label: `Delivery / completion after signing (${manualType || 'goods'}, planning default)`, days: deliveryDays(manualType, tceInclMn, method) }
+  ];
+  const total = steps.reduce((s, x) => s + x.days, 0);
+  const out = { steps, total_days: total, required_date: requiredDate || null, method: method || null };
+  if (!requiredDate) {
+    out.start = today; out.delivery = addDays(today, total); out.feasible = null;
+    out.note = 'No required date was given by the department; dates shown are the earliest if procurement starts today.';
+    return out;
+  }
+  const latestStart = addDays(requiredDate, -total);
+  if (latestStart >= today) {
+    out.start = latestStart; out.delivery = requiredDate; out.feasible = true;
+    out.note = `Start by ${latestStart} to deliver by the required date (${total} days end to end). Starting earlier adds a safety margin.`;
+  } else {
+    out.start = today; out.delivery = addDays(today, total); out.feasible = false;
+    out.late_days = diffDays(requiredDate, out.delivery);
+    out.note = `The required date cannot be met: the steps need ${total} days, so even starting today delivery is about ${out.delivery} (${out.late_days} days late). Tell the department, or consider a faster method if the value allows.`;
+  }
+  return out;
+}
+
 // Checks an item's method/values/dates against the Manual and returns human-readable warnings.
 function checkItem(item, manualType, limits = DEFAULT_LIMITS) {
   const warnings = [];
@@ -224,5 +303,5 @@ function checkItem(item, manualType, limits = DEFAULT_LIMITS) {
 module.exports = {
   METHODS, FUNDING_SOURCES, limitClass, BIDDING_PROCEDURES, COMMITTEE_LEVELS, DEFAULT_LIMITS, MILESTONES, ANNEX_VIII, ANNEX_IX,
   methodFamily, tceInclVat, mergeLimits, committeeLevel, shoppingAuthority, minBiddingDays,
-  annexBiddingWeeks, addDays, diffDays, buildSchedule, checkItem
+  annexBiddingWeeks, addDays, diffDays, buildSchedule, checkItem, deliveryDays, dateGuidance, milestoneGaps, scheduleFromWeeks
 };

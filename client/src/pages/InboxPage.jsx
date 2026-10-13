@@ -4,14 +4,22 @@ import { api } from '../api.js';
 import { useApp } from '../context/AppContext.jsx';
 import ItemForm from '../components/ItemForm.jsx';
 import { Msg, Status, useAction, CommentAction } from '../components/ui.jsx';
-import { fmt, inclVat, PRIORITY, FUNDING_LABEL } from '../lib/format.js';
+import { fmt, inclVat, PRIORITY, FUNDING_LABEL, recurLabel, phasingLabel, suggestBidType } from '../lib/format.js';
+import { BidTypeSelect } from './ExecutionPage.jsx';
 
 function ExecutionRequests() {
   const [rows, setRows] = useState([]);
-  const { busy, error, ok, run } = useAction();
+  const [types, setTypes] = useState({});
+  const { busy, error, ok, run, setError } = useAction();
   const load = useCallback(() => api.get('/execution-requests?status=pending').then(setRows), []);
   useEffect(() => { load(); }, [load]);
-  const act = (e, path, msg) => async comment => { await run(() => api.post(`/execution-requests/${e.id}/${path}`, { comment }), msg); load(); };
+  const typeOf = e => types[e.id] ?? suggestBidType(e.method);
+  const act = (e, path, msg) => async comment => {
+    if (path === 'accept' && !typeOf(e)) { setError(`${e.ref_no}: choose tender or quotation — the bid number is created from it.`); return; }
+    const out = await run(() => api.post(`/execution-requests/${e.id}/${path}`, { comment, bid_type: typeOf(e) }), msg);
+    if (out && out.bid_no) window.alert(`${e.ref_no}: bid number ${out.bid_no}`);
+    load();
+  };
 
   return (
     <>
@@ -26,6 +34,7 @@ function ExecutionRequests() {
           <p className="hint" style={{ margin: '6px 0' }}>
             {e.department}{e.sub_unit ? ' / ' + e.sub_unit : ''} · {e.method || 'method not assigned'} · requested by {e.requested_by_name} on {e.created_at.slice(0, 10)}{e.note ? ` — “${e.note}”` : ''}
           </p>
+          <div style={{ marginBottom: 8 }}><BidTypeSelect value={typeOf(e)} onChange={v => setTypes({ ...types, [e.id]: v })} /> <span className="hint" style={{ margin: 0 }}>Accepting creates the bid number (tender / quotation series).</span></div>
           <CommentAction busy={busy} actions={[
             { label: 'Accept and start execution', primary: true, onClick: act(e, 'accept', `${e.ref_no}: execution accepted.`) },
             { label: 'Return to department', onClick: act(e, 'return', `${e.ref_no}: returned to the department.`) }
@@ -55,9 +64,10 @@ export default function InboxPage() {
 
   const Table = ({ list }) => (
     <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
-      <thead><tr><th>Ref</th><th>Title</th><th>Unit</th><th>Category</th><th>Reason</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Funding</th><th>Priority</th><th>Year</th><th>Required</th><th></th></tr></thead>
+      <thead><tr><th>Ref</th><th>Title</th><th>Unit</th><th>Category</th><th>Type</th><th>Reason</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Funding</th><th>Priority</th><th>Year</th><th>Required</th><th></th></tr></thead>
       <tbody>{list.map(r => (
-        <tr key={r.id}><td>{r.ref_no}</td><td className="wrap">{r.title}</td><td>{r.department}{r.sub_unit ? ' / ' + r.sub_unit : ''}</td><td>{r.category}</td><td>{r.reason}</td>
+        <tr key={r.id}><td>{r.ref_no}</td><td className="wrap">{r.title}</td><td>{r.department}{r.sub_unit ? ' / ' + r.sub_unit : ''}</td><td>{r.category}</td>
+          <td>{r.expense_type}{r.recurrence === 'recurrent' && <span className="pill warn" style={{ marginLeft: 4 }} title={recurLabel(r)}>+{Number(r.annual_increase_pct)}%/yr</span>}{phasingLabel(r) && <span className="pill warn" style={{ marginLeft: 4 }} title={'Budget phasing: ' + phasingLabel(r)}>phased</span>}</td><td>{r.reason}</td>
           <td style={{ textAlign: 'right' }}>{fmt(inclVat(r.tce_excl_vat_mn, r.vat_pct))}</td><td>{FUNDING_LABEL[r.funding_source]}</td><td>{PRIORITY[r.priority]}</td>
           <td>{r.plan_fy}+{r.year_offset}</td><td>{r.required_date}</td>
           <td><button className="mini plain" onClick={() => { setMsg(''); setActive(r); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>assign</button></td></tr>
@@ -75,7 +85,7 @@ export default function InboxPage() {
       {active && (
         <ItemForm mode="create" source={active} categoryId={active.category_id}
           onCancel={() => setActive(null)}
-          onSaved={item => { setActive(null); setMsg(`${item.ref_no} added to the ${item.plan_fy} plan.`); load(); }} />
+          onSaved={item => { setActive(null); setMsg(`${item.ref_no} added to the ${item.plan_fy} plan${active.recurrence === 'recurrent' && item.year_offset < 2 ? `, with its recurrent repeats in the tentative year${item.year_offset === 0 ? 's' : ''}` : ''}.`); load(); }} />
       )}
 
       <ExecutionRequests />

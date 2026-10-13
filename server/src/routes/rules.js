@@ -27,7 +27,12 @@ router.post('/suggest', wrap(async (req, res) => {
   const schedule = item.procurement_start
     ? rules.buildSchedule({ start: item.procurement_start, delivery: item.expected_delivery, method: item.method, tceInclMn: check.tce_incl_vat_mn })
     : null;
-  res.json({ ...check, manual_type: manualType, schedule });
+  const guidance = rules.dateGuidance({
+    requiredDate: b.required_date || null, method: item.method, tceInclMn: check.tce_incl_vat_mn, manualType,
+    prequalification: item.prequalification, today: new Date().toISOString().slice(0, 10)
+  });
+  if (item.expected_delivery && guidance.required_date) guidance.delivery_vs_required_days = rules.diffDays(guidance.required_date, item.expected_delivery);
+  res.json({ ...check, manual_type: manualType, schedule, guidance });
 }));
 
 module.exports = router;

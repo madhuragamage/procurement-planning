@@ -2,10 +2,17 @@ const pool = require('./db');
 const rules = require('./rules');
 const { HttpError, num, optString, optDate, oneOf, reqString, isWide, inScope } = require('./util');
 
+const recurrence = require('./recurrence');
+
+// Projected repeats of a recurrent request show as REF/R1, REF/R2 (plan items aliased i, requests r).
+const ITEM_REF = "CONCAT(r.ref_no, IF(i.recur_index > 0, CONCAT('/R', i.recur_index), ''))";
+
+// A recurrent repeat is needed on the same date in its own year, hence the shifted required_date.
 const ITEM_SELECT = `
-  SELECT i.*, r.ref_no, r.department_id, d.name AS department, d.code AS department_code, dv.name AS division,
-         r.sub_unit_id, su.name AS sub_unit, r.reason, r.reason_note,
-         r.category_id, c.name AS category, c.manual_type, r.priority, r.required_date
+  SELECT i.*, ${ITEM_REF} AS ref_no, r.department_id, d.name AS department, d.code AS department_code, dv.name AS division,
+         r.sub_unit_id, su.name AS sub_unit, r.reason, r.reason_note, r.expense_type, r.recurrence, r.annual_increase_pct, r.budget_phasing,
+         r.category_id, c.name AS category, c.manual_type, r.priority,
+         DATE_ADD(r.required_date, INTERVAL i.recur_index YEAR) AS required_date
   FROM plan_items i
   JOIN requests r ON r.id = i.request_id
   JOIN departments d ON d.id = r.department_id
@@ -123,14 +130,28 @@ async function createItem(conn, requestId, body, userId, limits, { viaRevision =
     tce_excl_vat_mn: r.tce_excl_vat_mn, vat_pct: r.vat_pct, funding_source: r.funding_source, funding_agency: r.funding_agency,
     ...f
   };
-  const incl = rules.tceInclVat(item.tce_excl_vat_mn, item.vat_pct);
-  if (item.method && !item.committee_level) item.committee_level = rules.committeeLevel(incl, item.funding_source, limits);
-  if (item.procurement_start) {
-    item.milestones = JSON.stringify(rules.buildSchedule({ start: item.procurement_start, delivery: item.expected_delivery, method: item.method, tceInclMn: incl }));
+  const [ins] = await insertItem(conn, item, limits, !!f.committee_level);
+
+  // A recurrent need is repeated in each later year of the cycle as a tentative item, escalated yearly.
+  const repeats = r.recurrence === 'recurrent' ? recurrence.projections(item, r.annual_increase_pct) : [];
+  for (const p of repeats) {
+    await insertItem(conn, { ...item, ...p, milestones: undefined, committee_level: f.committee_level ? item.committee_level : undefined }, limits, !!f.committee_level);
   }
-  const { sql, vals } = buildInsert('plan_items', item);
-  const [ins] = await conn.query(sql, vals);
-  return { id: ins.insertId, ref_no: r.ref_no, plan_fy: r.plan_fy };
+  return { id: ins.insertId, ref_no: r.ref_no, plan_fy: r.plan_fy, repeats: repeats.length };
+}
+
+// Fills in the committee level (unless chosen explicitly) and draft schedule, then inserts.
+function insertItem(conn, item, limits, committeeChosen) {
+  const row = { ...item };
+  delete row.milestones;
+  const incl = rules.tceInclVat(row.tce_excl_vat_mn, row.vat_pct);
+  if (row.method && !committeeChosen) row.committee_level = rules.committeeLevel(incl, row.funding_source, limits);
+  if (!row.committee_level) delete row.committee_level;
+  if (row.procurement_start) {
+    row.milestones = JSON.stringify(rules.buildSchedule({ start: row.procurement_start, delivery: row.expected_delivery, method: row.method, tceInclMn: incl }));
+  }
+  const { sql, vals } = buildInsert('plan_items', row);
+  return conn.query(sql, vals);
 }
 
 // A milestone is overdue when it has no actual date and its current target (revised, else scheduled)
@@ -154,6 +175,6 @@ function delaySummary(item, today) {
 
 module.exports = {
   visibleItems, createItem, delaySummary,
-  ITEM_SELECT, EDITABLE_STATES, getPlan, ensurePlan, assertPlanEditable, loadItems, loadItem,
+  ITEM_SELECT, ITEM_REF, EDITABLE_STATES, getPlan, ensurePlan, assertPlanEditable, loadItems, loadItem,
   parseItemFields, buildInsert, mergeSchedule, snapshotPlan
 };

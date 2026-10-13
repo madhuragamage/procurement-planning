@@ -39,6 +39,47 @@ function Reminders({ data, canRequest, onSent }) {
   );
 }
 
+const REQUEST_STAGE = {
+  draft: ['Draft — submit it to your department head', 'warn'],
+  submitted: ['Awaiting department head authorisation', 'warn'],
+  returned: ['Returned — revise and resubmit', 'bad'],
+  authorised: ['Authorised — awaiting the procurement unit', 'ok']
+};
+
+// Department users: their own requests and execution requests that are still waiting on someone.
+function MyPending({ p }) {
+  const rows = [
+    ...p.requests.map(r => ({ key: 'r' + r.id, kind: 'Request', ref: r.ref_no, title: r.title, stage: REQUEST_STAGE[r.status], comment: r.review_comment, date: r.updated_at, to: '/app/requests' })),
+    ...p.execution_requests.map(e => ({ key: 'e' + e.id, kind: 'Execution', ref: e.ref_no, title: e.title,
+      stage: e.status === 'pending' ? ['Awaiting procurement unit acceptance', 'warn'] : ['Returned by procurement — send a new request', 'bad'],
+      comment: e.decision_comment, date: e.decided_at || e.created_at, to: '/app/execution' })),
+    ...p.change_requests.map(c => ({ key: 'c' + c.id, kind: c.action === 'cancel' ? 'Cancellation' : 'Modification', ref: c.ref_no, title: c.title,
+      stage: c.status === 'submitted' ? ['Awaiting department head authorisation', 'warn']
+        : c.status === 'pending' ? ['Authorised — awaiting the procurement unit', 'warn']
+        : c.status === 'returned' ? ['Returned', 'bad']
+        : c.revision_status === 'approved' ? [`Approved (revision #${c.revision_id})`, 'ok']
+        : c.revision_status === 'rejected' ? [`Rejected by management (revision #${c.revision_id})`, 'bad']
+        : c.revision_status === 'submitted' ? [`Awaiting management (revision #${c.revision_id})`, 'warn']
+        : [`In draft revision #${c.revision_id}`, 'warn'],
+      comment: c.decision_comment || c.revision_comment, date: c.revision_decided_at || c.decided_at || c.created_at, to: '/app/plan' }))
+  ];
+  return (
+    <div className="card" style={{ marginTop: 22 }}>
+      <h2>Your pending items</h2>
+      <p className="hint">Requests, execution requests and plan change requests from your unit that are not finished yet (and outcomes from the last 30 days), and who they are waiting on.</p>
+      {rows.length === 0 ? <div className="empty">Nothing pending.</div> : (
+        <div className="tbl-wrap"><table>
+          <thead><tr><th>Type</th><th>Ref</th><th>Description</th><th>Waiting on</th><th>Comment</th><th>Since</th></tr></thead>
+          <tbody>{rows.map(x => (
+            <tr key={x.key}><td>{x.kind}</td><td><Link to={x.to}>{x.ref}</Link></td><td className="wrap">{x.title}</td>
+              <td><span className={'pill ' + x.stage[1]}>{x.stage[0]}</span></td><td className="wrap">{x.comment || ''}</td><td>{String(x.date || '').slice(0, 10)}</td></tr>
+          ))}</tbody>
+        </table></div>
+      )}
+    </div>
+  );
+}
+
 function PlanProgress({ d }) {
   const p = d.progress;
   const scope = d.role === 'requester' || d.role === 'dept_head' ? 'your unit' : 'all departments';
@@ -111,13 +152,23 @@ export default function DashboardPage() {
       <div className="section-title" style={{ marginTop: 0 }}>Needs your attention</div>
       <div className="grid g4">
         {(role === 'dept_head' || role === 'admin') && <Stat v={t.to_authorise} l="Requests to authorise" cls={t.to_authorise ? 'warn' : 'ok'} to="/app/authorisations" />}
+        {role === 'dept_head' && <Stat v={t.change_requests_to_authorise} l="Plan change requests to authorise" cls={t.change_requests_to_authorise ? 'warn' : 'ok'} to="/app/authorisations" />}
         {(role === 'procurement' || role === 'admin') && <Stat v={t.to_plan} l="Authorised, awaiting a method" cls={t.to_plan ? 'warn' : 'ok'} to="/app/inbox" />}
         {(role === 'procurement' || role === 'admin') && <Stat v={t.execution_requests_pending} l="Execution requests from departments" cls={t.execution_requests_pending ? 'warn' : 'ok'} to="/app/inbox" />}
+        {(role === 'procurement' || role === 'admin') && <Stat v={t.change_requests_pending} l="Change requests from departments" cls={t.change_requests_pending ? 'warn' : 'ok'} to="/app/revisions" />}
         {(role === 'management' || role === 'admin') && <Stat v={t.plans_awaiting_approval} l="Plans awaiting approval" cls={t.plans_awaiting_approval ? 'warn' : 'ok'} to="/app/plan" />}
         {(role === 'management' || role === 'admin') && <Stat v={t.revisions_awaiting_approval} l="Revisions awaiting approval" cls={t.revisions_awaiting_approval ? 'warn' : 'ok'} to="/app/revisions" />}
         {deptRole && <Stat v={d.reminders.items.length} l="Items due to start — request execution" cls={d.reminders.items.length ? 'warn' : 'ok'} to="/app/plan" />}
-        <Stat v={d.delayed_count} l="Items with overdue milestones" cls={d.delayed_count ? 'bad' : 'ok'} to="/app/execution" />
+        {deptRole && <Stat v={d.pending.requests.length} l="Your requests in progress" cls={d.pending.requests.some(r => r.status === 'returned') ? 'bad' : d.pending.requests.length ? 'warn' : 'ok'} to="/app/requests" />}
+        {deptRole && <Stat v={t.execution_requests_pending} l="Your execution requests awaiting procurement" cls={t.execution_requests_pending ? 'warn' : 'ok'} to="/app/execution" />}
+        {role !== 'supplies' && <Stat v={d.delayed_count} l="Items with overdue milestones" cls={d.delayed_count ? 'bad' : 'ok'} to="/app/execution" />}
+        {d.supplies && (role === 'supplies' || role === 'admin') && <Stat v={d.supplies.awaiting_acceptance} l="Supplies files to accept" cls={d.supplies.awaiting_acceptance ? 'warn' : 'ok'} to="/app/supplies" />}
+        {d.supplies && <Stat v={d.supplies.with_overdue_steps} l="Supplies files with overdue steps" cls={d.supplies.with_overdue_steps ? 'bad' : 'ok'} to="/app/supplies" />}
+        {d.supplies && <Stat v={d.supplies.deliveries_overdue} l="Deliveries overdue" cls={d.supplies.deliveries_overdue ? 'bad' : 'ok'} to="/app/supplies" />}
+        {d.supplies && <Stat v={d.supplies.bonds_expiring + d.supplies.bonds_expired} l={`Bonds expiring soon${d.supplies.bonds_expired ? ` / ${d.supplies.bonds_expired} expired` : ''}`} cls={d.supplies.bonds_expired ? 'bad' : d.supplies.bonds_expiring ? 'warn' : 'ok'} to="/app/supplies" />}
       </div>
+
+      {deptRole && <MyPending p={d.pending} />}
 
       <div style={{ marginTop: 22 }}><PlanProgress d={d} /></div>
 
@@ -159,17 +210,17 @@ export default function DashboardPage() {
 
         <div className="card">
           <h2>Budget use {fy}</h2>
-          <p className="hint">Committed plan items against allocation.</p>
+          <p className="hint">Committed plan items against allocation, CAPEX and OPEX separately.</p>
           {availability.length === 0 ? <div className="empty">No budget or plan data for {fy}.</div> : (
             <div className="tbl-wrap"><table>
-              <thead><tr><th>Department</th><th style={{ textAlign: 'right' }}>Allocated</th><th style={{ textAlign: 'right' }}>Committed</th><th>Use</th></tr></thead>
-              <tbody>{availability.map(a => {
-                const p = a.allocated ? Math.min(100, (a.committed / a.allocated) * 100) : 0;
+              <thead><tr><th>Department</th><th>Type</th><th style={{ textAlign: 'right' }}>Allocated</th><th style={{ textAlign: 'right' }}>Committed</th><th>Use</th></tr></thead>
+              <tbody>{availability.flatMap(a => [['CAPEX', a.capex], ['OPEX', a.opex]].filter(([, t]) => t.allocated || t.committed).map(([type, t]) => {
+                const p = t.allocated ? Math.min(100, (t.committed / t.allocated) * 100) : 0;
                 return (
-                  <tr key={a.department_id}><td>{a.department}</td><td style={{ textAlign: 'right' }}>{fmt(a.allocated)}</td><td style={{ textAlign: 'right' }}>{fmt(a.committed)}</td>
-                    <td>{a.allocated ? <div className={'bar' + (a.over_budget ? ' over' : '')}><div style={{ width: p + '%' }}></div></div> : <span className="hint">no allocation</span>}</td></tr>
+                  <tr key={a.department_id + type}><td>{a.department}</td><td>{type}</td><td style={{ textAlign: 'right' }}>{fmt(t.allocated)}</td><td style={{ textAlign: 'right' }}>{fmt(t.committed)}</td>
+                    <td>{t.allocated ? <div className={'bar' + (t.over_budget ? ' over' : '')}><div style={{ width: p + '%' }}></div></div> : <span className="hint">no allocation</span>}</td></tr>
                 );
-              })}</tbody>
+              }))}</tbody>
             </table></div>
           )}
         </div>

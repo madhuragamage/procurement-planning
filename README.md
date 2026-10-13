@@ -28,14 +28,23 @@ Database: `server/sql/schema.sql` is the version-1 baseline; the server applies 
 
 ## Workflow
 
-1. **Request** – a department user or a **sub unit** creates a request (category, **reason** ROL / Replacement / New /
-   Other, cost excl./incl. VAT, **funding** LECO (default) / GOSL / Foreign / Grant, required date, plan cycle and
-   year) and submits it. Each sub unit files independently and sees only its own requests.
+1. **Request** – a department user or a **sub unit** creates a request (category, **CAPEX / OPEX**, **reason** ROL /
+   Replacement / New / Action Plan / Other, cost excl./incl. VAT, **funding** LECO (default) / GOSL / Foreign / Grant,
+   required date, plan cycle and year, **one time or recurrent annually** with a yearly % increase, and optional
+   **budget phasing** – the % of the value needed in the start year and up to two following years) and submits it.
+   Each sub unit files independently and sees only its own requests.
 2. **Authorise** – the department head authorises, returns (with comment) or rejects it.
 3. **Procurement inbox** – the procurement unit assigns method, bidding procedure, prequalification,
    committee level, procurement start and expected delivery. Live checks against the Manual appear as
-   warnings; a milestone schedule (Annex III) is drafted from the dates.
-4. **Plan** – items form the annual plan (year 1) and tentative plans (years 2–3) of a cycle. The
+   warnings; a milestone schedule (Annex III) is drafted from the dates. **Date guidance** works back from the
+   department's required date by the steps the method and value need (Section 6.3 bidding periods plus planning
+   defaults for preparation, award and delivery – `DELIVERY_DAYS` in `rules.js`) and suggests start and delivery
+   dates, or the earliest achievable delivery if the required date cannot be met. The **Expected dates** report
+   tells each requesting department when its procurements are expected, against the date it asked for.
+4. **Plan** – items form the annual plan (year 1) and tentative plans (years 2–3) of a cycle. Adding a recurrent
+   request also creates its repeats in each later year of the cycle (ref `…/R1`, `…/R2`), with the estimate escalated
+   by the yearly % (compounded) and the dates moved on a year each; they are separate items that can be edited on
+   their own, and removing the original removes them. The
    procurement unit submits it; management approves or returns it with comments; an approved plan is
    frozen.
 5. **Revisions** – a frozen plan can only change through a bi-annual or urgent revision (add / modify /
@@ -46,7 +55,33 @@ Database: `server/sql/schema.sql` is the version-1 baseline; the server applies 
    reminded on its dashboard and sends an **execution request**. Only the procurement unit accepts it (or returns
    it with a comment) and records revised/actual milestone dates, supplier and award value. Progress cannot be
    recorded before a request is accepted.
-7. **Reports** – MPP (Annex I), APPP (Annex II), DAPP (Annex III, Schedule/Revised/Actual rows),
+7. **Technical Evaluation Committees (TEC tab)** – the procurement unit keeps a directory of members (staff or
+   external, no login needed) and appoints a committee (chair, members, secretary) with a due date for an item in
+   execution. Members get an appointment e-mail; those who have not submitted get reminders 7 days before the due date
+   (Admin setting `tec.reminder_days`) and once it lapses, from an hourly job, and on demand. Extending the due date
+   re-arms the reminders. Appointment and completion fill the "Appointment of BEC" and "Bid evaluation" milestones.
+   Each member's performance (on time / late / overdue / not submitted, average days taken, on-time rate) is shown.
+   E-mail goes through the SMTP server in `.env` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`,
+   `MAIL_FROM`); without it, messages are kept in the e-mail log as "not sent".
+8. **Bid numbers** – when the P&P unit accepts (or itself starts) execution it classes the procurement as a tender or
+   a quotation (suggested from the method) and it gets a bid number `T/<year>/<nnnn>` or `Q/<year>/<nnnn>` (prefixes in
+   the `bid_numbering` setting). The bid number is shown with the procurement reference from then on. The procurement
+   unit then sets the **time schedule** (Execution page): auto (standard lead times for the method and value) or custom
+   weeks per milestone, counted from the previous milestone; the dates become each milestone's target (revised) date,
+   while the approved plan dates remain the baseline.
+9. **Supplies (Supplies tab, role "Supplies Unit")** – Supplies Unit officers handle the forwarded files (each file has
+   a responsible officer). The head of the department set as the Supplies department (Admin → Limits, reminders &
+   organisation) can view everything read-only, including each officer's workload. Once the award is made, P&P forwards the file.
+   Supplies accepts it (same day), enters the award details (supplier, P/O or LoA, local and foreign cost, CIF/FOB,
+   freight, insurance, bid bond, bid validity, delivery date, Performance Bond amount and validity – default delivery +
+   60 days) and records each step of the work procedure. Steps apply by contract: advance payment bond, proof approval,
+   contract agreement (within a month of award), LC/TT, FAT, duty waiver, import clearance, Letter of Acceptance invoice.
+   Informing the supplier sets the Performance Bond / proforma invoice due dates (14 days each, `supplies` setting);
+   suppliers are e-mailed when these lapse and every 7 days after. Bond register (bid / performance / advance) with
+   expiry notices to Supplies users 7 days ahead, extension and forfeiture tracking; deliveries in batches with
+   inspection; supplier letters; delivery-extension / delay-waiver requests. Reports: status update schedule, bond
+   register, delay-waiver approval schedule.
+10. **Reports** – MPP (Annex I), APPP (Annex II), DAPP (Annex III, Schedule/Revised/Actual rows),
    Preparatory plan (Annex VI), category-wise, department × category, method and committee summaries,
    budget availability and the **Quarterly Procurement Performance Report**. Each has "Print / save as
    PDF" (browser print) and CSV download.
@@ -78,8 +113,9 @@ Annex VIII/IX are used in warnings, the Preparatory-plan selection rule (procure
 ## Assumptions and limits
 
 - Financial year = calendar year. A "plan cycle" is a base year plus the two following tentative years.
-- Budget year of an item = cycle + year offset; availability = allocation − plan items (incl. VAT).
+- Budget year of an item = cycle + year offset; availability = allocation − plan items (incl. VAT), worked out
+  separately for CAPEX and OPEX allocations (each budget line is one or the other).
 - Funding classes for the limits: LECO and GOSL use the GOSL tables; Foreign and Grant use the foreign-funded tables.
-- Reminders are in-app (dashboard, plan page); there is no e-mail/SMS.
-- Not included: e-mail notifications, e-signatures, attachments, consolidation across companies for the
+- Workflow reminders are in-app (dashboard, plan page); only TEC appointments and reminders are e-mailed. No SMS.
+- Not included: e-mail notifications for the other workflow steps, e-signatures, attachments, consolidation across companies for the
   ministry, Chapters 5–8 (bidding documents, evaluation, contract management).

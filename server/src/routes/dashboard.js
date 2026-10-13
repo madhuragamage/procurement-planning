@@ -59,13 +59,47 @@ router.get('/', wrap(async (req, res) => {
   const scopeSql = wide ? '' : ' WHERE department_id = ?' + (req.user.role === 'requester' && req.user.sub_unit_id ? ' AND sub_unit_id = ?' : '');
   const scopeParams = wide ? [] : [req.user.department_id, ...(req.user.role === 'requester' && req.user.sub_unit_id ? [req.user.sub_unit_id] : [])];
 
+  // The same scope as an "AND ..." clause on the requests table aliased r.
+  const rScope = wide ? '' : ' AND r.department_id = ?' + (scopeParams.length > 1 ? ' AND r.sub_unit_id = ?' : '');
+
   const [reqCounts] = await pool.query(`SELECT status, COUNT(*) AS n FROM requests${scopeSql} GROUP BY status`, scopeParams);
   const [planRows] = await pool.query('SELECT fy, status, version FROM plans ORDER BY fy DESC LIMIT 5');
   const [toAuthorise] = await pool.query("SELECT COUNT(*) AS n FROM requests WHERE status = 'submitted' AND department_id = ?", [req.user.department_id || 0]);
-  const [toPlan] = await pool.query("SELECT COUNT(*) AS n FROM requests r LEFT JOIN plan_items i ON i.request_id = r.id WHERE r.status = 'authorised' AND i.id IS NULL");
+  const [toPlan] = await pool.query(`SELECT COUNT(*) AS n FROM requests r LEFT JOIN plan_items i ON i.request_id = r.id AND i.recur_index = 0 WHERE r.status = 'authorised' AND i.id IS NULL${rScope}`, scopeParams);
   const [planSubmitted] = await pool.query("SELECT COUNT(*) AS n FROM plans WHERE status = 'submitted'");
   const [revSubmitted] = await pool.query("SELECT COUNT(*) AS n FROM plan_revisions WHERE status = 'submitted'");
-  const [execPending] = await pool.query("SELECT COUNT(*) AS n FROM execution_requests WHERE status = 'pending'");
+  const [execPending] = await pool.query(
+    `SELECT COUNT(*) AS n FROM execution_requests e JOIN plan_items i ON i.id = e.plan_item_id JOIN requests r ON r.id = i.request_id WHERE e.status = 'pending'${rScope}`, scopeParams);
+
+  const [changeToAuthorise] = await pool.query(
+    `SELECT COUNT(*) AS n FROM change_requests c JOIN plan_items i ON i.id = c.plan_item_id JOIN requests r ON r.id = i.request_id
+     WHERE c.status = 'submitted' AND r.department_id = ?`, [req.user.department_id || 0]);
+  const [changePending] = await pool.query(
+    `SELECT COUNT(*) AS n FROM change_requests c JOIN plan_items i ON i.id = c.plan_item_id JOIN requests r ON r.id = i.request_id WHERE c.status = 'pending'${rScope}`, scopeParams);
+
+  // Department users: everything of theirs still waiting on someone (themselves, their head or procurement).
+  let pending = null;
+  if (!wide) {
+    const [reqs] = await pool.query(
+      `SELECT r.id, r.ref_no, r.title, r.status, r.review_comment, r.updated_at, r.expense_type FROM requests r
+       LEFT JOIN plan_items pi ON pi.request_id = r.id AND pi.recur_index = 0
+       WHERE (r.status IN ('draft','submitted','returned') OR (r.status = 'authorised' AND pi.id IS NULL))${rScope}
+       ORDER BY r.updated_at DESC`, scopeParams);
+    const [execs] = await pool.query(
+      `SELECT e.id, e.plan_item_id, ${lib.ITEM_REF} AS ref_no, i.title, e.status, e.decision_comment, e.created_at, e.decided_at, i.procurement_start
+       FROM execution_requests e JOIN plan_items i ON i.id = e.plan_item_id JOIN requests r ON r.id = i.request_id
+       WHERE (e.status = 'pending' OR (e.status = 'returned' AND i.exec_status = 'returned'))${rScope}
+       ORDER BY e.created_at DESC`, scopeParams);
+    // Change requests still open, plus recent outcomes (returned, or decided by management) from the last 30 days.
+    const [changes] = await pool.query(
+      `SELECT c.id, c.action, c.status, c.reason, c.decision_comment, c.created_at, c.decided_at, ${lib.ITEM_REF} AS ref_no, i.title,
+              v.id AS revision_id, v.status AS revision_status, v.decided_at AS revision_decided_at, v.decision_comment AS revision_comment
+       FROM change_requests c JOIN plan_items i ON i.id = c.plan_item_id JOIN requests r ON r.id = i.request_id LEFT JOIN plan_revisions v ON v.id = c.revision_id
+       WHERE (c.status IN ('submitted','pending') OR (c.status = 'included' AND (v.status IN ('draft','submitted') OR v.decided_at >= NOW() - INTERVAL 30 DAY))
+              OR (c.status = 'returned' AND c.decided_at >= NOW() - INTERVAL 30 DAY))${rScope}
+       ORDER BY c.created_at DESC`, scopeParams);
+    pending = { requests: reqs, execution_requests: execs, change_requests: changes };
+  }
 
   // Progress of the selected cycle's annual plan (department users: their own unit's items).
   const { status: planStatus, items } = await annualItems(fy, req.user);
@@ -84,8 +118,9 @@ router.get('/', wrap(async (req, res) => {
     today: t, role: req.user.role, plan_fy: fy, plan_status: planStatus,
     requests: Object.fromEntries(reqCounts.map(r => [r.status, r.n])),
     plans: planRows,
-    todo: { to_authorise: toAuthorise[0].n, to_plan: toPlan[0].n, plans_awaiting_approval: planSubmitted[0].n, revisions_awaiting_approval: revSubmitted[0].n, execution_requests_pending: execPending[0].n },
-    progress: prog,
+    todo: { to_authorise: toAuthorise[0].n, to_plan: toPlan[0].n, plans_awaiting_approval: planSubmitted[0].n, revisions_awaiting_approval: revSubmitted[0].n, execution_requests_pending: execPending[0].n, change_requests_pending: changePending[0].n, change_requests_to_authorise: changeToAuthorise[0].n },
+    progress: prog, pending,
+    supplies: req.user.role !== 'executive' && await require('./lookups').canViewSupplies(req.user) ? await require('./supplies').dashboardCounts() : null,
     reminders: await loadReminders(req.user, t),
     delayed: delayed.slice(0, 10), delayed_count: delayed.length,
     deadlines: deadlinesFor(t)
