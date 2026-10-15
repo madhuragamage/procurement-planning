@@ -25,8 +25,9 @@ export const BID_TYPE = { tender: 'Tender', quotation: 'Quotation' };
 export const suggestBidType = method => (['ICB', 'LIB', 'NCB', 'LNB'].includes(method) ? 'tender' : String(method || '').startsWith('Shopping') ? 'quotation' : '');
 
 export const FUNDING_LABEL = { LECO: 'LECO (own funds)', GOSL: 'GOSL', Foreign: 'Foreign funded', Grant: 'Grant' };
-export const REASON_LABEL = { ROL: 'ROL (re-order level)', Replacement: 'Replacement', New: 'New', 'Action Plan': 'Action Plan', Other: 'Other' };
-export const EXPENSE_LABEL = { CAPEX: 'CAPEX (capital)', OPEX: 'OPEX (operational)' };
+export const REASON_LABEL = { ROL: 'ROL (re-order level)', New: 'New', Replacement: 'Replacement', 'Action Plan': 'Action Plan', 'Projects-ADB': 'Projects-ADB', 'Projects-LECO': 'Projects-LECO', Other: 'Other' };
+export const EXPENSE_LABEL = { CAPEX: 'CAPEX (Capital)', OPEX: 'OPEX (Operational)', Inventory: 'Inventory' };
+export const MAIN_CATEGORY_LABEL = { goods: 'Goods', works: 'Works', services: 'Non-Consultancy Services', consultancy: 'Consultancy Services' };
 // "2026: 40% · 2027: 60%" for a request/item whose budget is phased over years; '' otherwise.
 export const phasingLabel = r => Array.isArray(r.budget_phasing) && r.budget_phasing.length > 1
   ? r.budget_phasing.map((p, k) => `${Number(r.plan_fy) + Number(r.year_offset) + k}: ${p}%`).join(' · ') : '';

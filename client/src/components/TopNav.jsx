@@ -16,7 +16,8 @@ const TABS = [
   ['revisions', 'Revisions', ['procurement', 'management', 'admin', 'executive']],
   ['execution', 'Execution', null],
   ['tec', 'TEC', ['procurement', 'management', 'admin', 'executive']],
-  ['supplies', 'Supplies', 'supplies'],
+  ['supplies-progress', 'Supplies progress', 'supplies'],
+  ['supplies', 'Supplies files', 'supplies'],
   ['budgets', 'Budgets', null],
   ['reports', 'Reports', null],
   ['admin', 'Admin', ['admin']]
@@ -26,7 +27,10 @@ export default function TopNav() {
   const { user, logout } = useAuth();
   const { lookups, fy, setFy } = useApp();
   const { theme, toggleTheme } = useTheme();
-  const tabs = TABS.filter(([, , roles]) => !roles || (roles === 'supplies' ? canSeeSupplies(user, lookups) : roles.includes(user.role)));
+  // Supplies Unit officers only work with the Supplies files forwarded to them.
+  const SUPPLIES_ONLY = ['supplies-progress', 'supplies', 'reports'];
+  const tabs = TABS.filter(([path, , roles]) => (user.role === 'supplies' ? SUPPLIES_ONLY.includes(path)
+    : !roles || (roles === 'supplies' ? canSeeSupplies(user, lookups) : roles.includes(user.role))));
 
   return (
     <header className="top no-print">
@@ -45,7 +49,7 @@ export default function TopNav() {
         ))}
       </nav>
       <div className="headright">
-        <FySelect fy={fy} setFy={setFy} />
+        {user.role !== 'supplies' && <FySelect fy={fy} setFy={setFy} />}
         <button className="iconbtn" onClick={toggleTheme}>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</button>
         <span style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'right' }}>
           {user.name}<br />{ROLE_LABEL[user.role]}{user.department ? ' · ' + user.department : ''}{user.sub_unit ? ' / ' + user.sub_unit : ''}

@@ -7,7 +7,8 @@ const rules = require('../rules');
 const recurrence = require('../recurrence');
 
 const router = express.Router();
-const REASONS = ['ROL', 'Replacement', 'New', 'Action Plan', 'Other'];
+const REASONS = ['ROL', 'New', 'Replacement', 'Action Plan', 'Projects-ADB', 'Projects-LECO', 'Other'];
+const MAIN_CATEGORIES = ['goods', 'works', 'services', 'consultancy'];
 
 async function loadLimits() {
   const [rows] = await pool.query("SELECT value FROM settings WHERE `key` = 'limits'");
@@ -45,12 +46,14 @@ router.get('/', wrap(async (req, res) => {
   const [divisions] = await pool.query('SELECT id, name, active FROM divisions ORDER BY name');
   const [departments] = await pool.query('SELECT d.id, d.code, d.name, d.active, d.division_id, v.name AS division FROM departments d LEFT JOIN divisions v ON v.id = d.division_id ORDER BY d.name');
   const [subUnits] = await pool.query('SELECT id, department_id, name, active FROM sub_units ORDER BY name');
-  const [categories] = await pool.query('SELECT id, name, manual_type, active FROM categories ORDER BY name');
+  const [categories] = await pool.query("SELECT id, name, manual_type, active FROM categories ORDER BY FIELD(manual_type, 'goods', 'works', 'services', 'consultancy'), sort_order, id");
+  const [budgetCodes] = await pool.query("SELECT id, expense_type, code, description, active FROM budget_codes ORDER BY FIELD(expense_type, 'CAPEX', 'OPEX', 'Inventory'), code");
   const [org] = await pool.query("SELECT value FROM settings WHERE `key` = 'org'");
   res.json({
-    divisions, departments, subUnits, categories,
+    divisions, departments, subUnits, categories, budgetCodes, mainCategories: MAIN_CATEGORIES,
     reminders: { lead_days: await loadReminderDays() },
     suppliesUnit: { department_id: await loadSuppliesDepartment() },
+    me: { procurement_head: await isProcurementHead(req.user) },
     fundingSources: rules.FUNDING_SOURCES, reasons: REASONS, expenseTypes: recurrence.EXPENSE_TYPES,
     org: org.length ? org[0].value : {},
     methods: rules.METHODS, biddingProcedures: rules.BIDDING_PROCEDURES,
@@ -125,14 +128,31 @@ router.put('/sub-units/:id', requireRole('admin'), wrap(async (req, res) => {
 
 // The procurement unit maintains the category list (per the brief).
 router.post('/categories', requireRole('admin', 'procurement'), wrap(async (req, res) => {
-  const type = oneOf(req.body.manual_type, ['goods', 'works', 'services'], 'Manual type');
+  const type = oneOf(req.body.manual_type, MAIN_CATEGORIES, 'Main category');
   const [r] = await pool.query('INSERT INTO categories (name, manual_type) VALUES (?,?)', [reqString(req.body.name, 'Name', 80), type]);
   await audit(null, 'category', r.insertId, 'create', req.user.id, req.body.name);
   res.status(201).json({ id: r.insertId });
 }));
 router.put('/categories/:id', requireRole('admin', 'procurement'), wrap(async (req, res) => {
   const { sql, vals } = patchSql('categories', req.body, {
-    name: v => reqString(v, 'Name', 80), manual_type: v => oneOf(v, ['goods', 'works', 'services'], 'Manual type'), active
+    name: v => reqString(v, 'Name', 80), manual_type: v => oneOf(v, MAIN_CATEGORIES, 'Main category'), active
+  });
+  await pool.query(sql, [...vals, Number(req.params.id)]);
+  res.json({ ok: true });
+}));
+
+// Budget codes under each Budget Category (CAPEX / OPEX / Inventory), maintained by the administrator.
+router.post('/budget-codes', requireRole('admin'), wrap(async (req, res) => {
+  const type = oneOf(req.body.expense_type, recurrence.EXPENSE_TYPES, 'Budget category');
+  const [r] = await pool.query('INSERT INTO budget_codes (expense_type, code, description) VALUES (?,?,?)',
+    [type, reqString(String(req.body.code ?? ''), 'Budget code', 30), reqString(req.body.description, 'Description', 200)]);
+  await audit(null, 'budget_code', r.insertId, 'create', req.user.id, `${type} ${req.body.code}`);
+  res.status(201).json({ id: r.insertId });
+}));
+router.put('/budget-codes/:id', requireRole('admin'), wrap(async (req, res) => {
+  const { sql, vals } = patchSql('budget_codes', req.body, {
+    expense_type: v => oneOf(v, recurrence.EXPENSE_TYPES, 'Budget category'), code: v => reqString(String(v), 'Budget code', 30),
+    description: v => reqString(v, 'Description', 200), active
   });
   await pool.query(sql, [...vals, Number(req.params.id)]);
   res.json({ ok: true });
@@ -201,3 +221,12 @@ module.exports.loadLimits = loadLimits;
 module.exports.loadReminderDays = loadReminderDays;
 module.exports.REASONS = REASONS;
 module.exports.canViewSupplies = canViewSupplies;
+
+// The procurement unit's own department (where procurement-role users sit); its head may amend requests
+// received by the procurement unit, alongside procurement officers.
+async function isProcurementHead(user) {
+  if (user.role !== 'dept_head' || !user.department_id) return false;
+  const [rows] = await pool.query("SELECT 1 FROM users WHERE role = 'procurement' AND active = 1 AND department_id = ? LIMIT 1", [user.department_id]);
+  return rows.length > 0;
+}
+module.exports.isProcurementHead = isProcurementHead;

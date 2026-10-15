@@ -5,6 +5,7 @@ const { wrap, HttpError, reqString, optString, oneOf, audit, tx } = require('../
 const lib = require('../planLib');
 const rules = require('../rules');
 const recurrence = require('../recurrence');
+const { EXPENSE_TYPES } = recurrence;
 const { loadLimits } = require('./lookups');
 
 const router = express.Router();
@@ -43,7 +44,7 @@ async function revisionReport(v) {
   const changes = await loadChanges(v.id);
   const rows = []; let n = 0;
   const totals = { add: 0, addValue: 0, mod: 0, cancel: 0, cancelValue: 0 };
-  const byYear = new Map(); const byType = { CAPEX: 0, OPEX: 0 };
+  const byYear = new Map(); const byType = Object.fromEntries(EXPENSE_TYPES.map(t => [t, 0]));
   const effect = (year, type, amount) => { byYear.set(year, (byYear.get(year) || 0) + amount); byType[type] += amount; };
   const yearOf = o => `${v.plan_fy + o}${o === 0 ? ' (annual)' : ' (tentative)'}`;
   const source = c => c.change_request_id ? 'Department' : 'Procurement unit';
@@ -113,7 +114,7 @@ async function revisionReport(v) {
       { label: 'Net change (LKR Mn)', value: (net >= 0 ? '+' : '') + r2(net).toLocaleString('en-US', { minimumFractionDigits: 2 }) },
       { label: 'Plan total before (LKR Mn)', value: r2(before).toLocaleString('en-US', { minimumFractionDigits: 2 }) },
       { label: 'Plan total after (LKR Mn)', value: r2(before + net).toLocaleString('en-US', { minimumFractionDigits: 2 }) },
-      ...['CAPEX', 'OPEX'].filter(t => byType[t]).map(t => ({ label: `Net change ${t} (LKR Mn)`, value: (byType[t] >= 0 ? '+' : '') + r2(byType[t]).toLocaleString('en-US', { minimumFractionDigits: 2 }) })),
+      ...EXPENSE_TYPES.filter(t => byType[t]).map(t => ({ label: `Net change ${t} (LKR Mn)`, value: (byType[t] >= 0 ? '+' : '') + r2(byType[t]).toLocaleString('en-US', { minimumFractionDigits: 2 }) })),
       ...[...byYear.entries()].sort((a, b) => a[0] - b[0]).filter(([, x]) => Math.abs(x) > 1e-9).map(([o, x]) => ({ label: `Net change ${v.plan_fy + o} (LKR Mn)`, value: (x >= 0 ? '+' : '') + r2(x).toLocaleString('en-US', { minimumFractionDigits: 2 }) }))
     ]
   };

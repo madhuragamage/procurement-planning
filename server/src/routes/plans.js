@@ -56,7 +56,7 @@ router.get('/:fy', wrap(async (req, res) => {
   const budgetWarnings = [];
   for (let o = 0; o < 3; o++) {
     for (const d of await availability(fy + o)) {
-      for (const [type, t] of [['CAPEX', d.capex], ['OPEX', d.opex]]) {
+      for (const [type, t] of Object.entries(d.by_type)) {
         if (t.over_budget) budgetWarnings.push(`${d.department} ${fy + o} ${type}: committed LKR ${t.committed} Mn exceeds allocation LKR ${t.allocated} Mn`);
       }
     }

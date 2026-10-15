@@ -13,13 +13,19 @@ const VIEW = ['procurement', 'admin', 'management', 'executive'];
 const ROLES = ['chair', 'member', 'secretary'];
 const today = () => new Date().toISOString().slice(0, 10);
 
+// Reminder lead time and the signature block used on every TEC e-mail.
 async function settings() {
   const [rows] = await pool.query("SELECT value FROM settings WHERE `key` = 'tec'");
-  return { reminder_days: rows.length ? Number(rows[0].value.reminder_days) || 7 : 7 };
+  const v = rows.length ? rows[0].value : {};
+  return { reminder_days: Number(v.reminder_days) || 7, signature: Object.fromEntries(tec.SIGNATURE_FIELDS.map(k => [k, (v.signature && v.signature[k]) || ''])) };
 }
 async function orgName() {
   const [rows] = await pool.query("SELECT value FROM settings WHERE `key` = 'org'");
   return rows.length ? rows[0].value.name : '';
+}
+// What every e-mail needs besides the committee: organisation name and signature block.
+async function mailContext() {
+  return { org: await orgName(), sig: (await settings()).signature };
 }
 
 const COMMITTEE_SELECT = `
@@ -59,14 +65,14 @@ async function markMilestone(conn, itemId, key, date) {
 async function sendAppointment(assignmentId) {
   const [[a]] = await pool.query('SELECT a.*, m.name, m.email FROM tec_assignments a JOIN tec_members m ON m.id = a.member_id WHERE a.id = ?', [assignmentId]);
   const c = await loadCommittee(a.committee_id);
-  const mail = tec.appointmentMail({ member: a, role: a.role, c, org: await orgName() });
+  const mail = tec.appointmentMail({ member: a, role: a.role, c, today: today(), ...(await mailContext()) });
   const status = await mailer.send({ to: a.email, ...mail, kind: 'tec-appointment', entity: 'tec', entityId: c.id });
   await pool.query('UPDATE tec_assignments SET appointment_sent_at = NOW() WHERE id = ?', [a.id]);
   return status;
 }
 
-async function sendReminder(a, c, kind, t, org) {
-  const mail = tec.reminderMail({ member: a, c, kind, today: t, org });
+async function sendReminder(a, c, kind, t, ctx) {
+  const mail = tec.reminderMail({ member: a, c, kind, today: t, ...ctx });
   const status = await mailer.send({ to: a.email, ...mail, kind: `tec-reminder-${kind}`, entity: 'tec', entityId: c.id });
   if (kind === 'before') await pool.query('UPDATE tec_assignments SET reminder_before_at = NOW() WHERE id = ?', [a.id]);
   if (kind === 'overdue') await pool.query('UPDATE tec_assignments SET reminder_overdue_at = NOW() WHERE id = ?', [a.id]);
@@ -78,7 +84,7 @@ async function sendReminder(a, c, kind, t, org) {
 async function runReminders() {
   const t = today();
   const { reminder_days: lead } = await settings();
-  const org = await orgName();
+  const ctx = await mailContext();
   const [committees] = await pool.query(`${COMMITTEE_SELECT} WHERE t.status = 'active'`);
   let sent = 0;
   for (const c of committees) {
@@ -87,15 +93,15 @@ async function runReminders() {
     if (!before && !lapsed) continue;
     for (const a of await loadAssignments([c.id])) {
       if (a.submitted_on) continue;
-      if (before && !a.reminder_before_at) { await sendReminder(a, c, 'before', t, org); sent += 1; }
-      if (lapsed && !a.reminder_overdue_at) { await sendReminder(a, c, 'overdue', t, org); sent += 1; }
+      if (before && !a.reminder_before_at) { await sendReminder(a, c, 'before', t, ctx); sent += 1; }
+      if (lapsed && !a.reminder_overdue_at) { await sendReminder(a, c, 'overdue', t, ctx); sent += 1; }
     }
   }
   return sent;
 }
 
 router.get('/status', requireRole(...VIEW), wrap(async (req, res) => {
-  res.json({ email_configured: mailer.configured(), ...(await settings()) });
+  res.json({ email_configured: mailer.configured(), ...(await settings()), organisation_default: await orgName() });
 }));
 
 // ---- Members directory with performance ----
@@ -189,8 +195,8 @@ router.post('/committees', requireRole(...PROC), wrap(async (req, res) => {
     if (open) throw new HttpError(409, `This procurement already has an active TEC (#${open.id}).`);
     const [members] = await conn.query('SELECT id, active FROM tec_members WHERE id IN (?)', [roster.map(r => r.member_id)]);
     if (members.length !== roster.length || members.some(m => !m.active)) throw new HttpError(400, 'Every member must be an active member of the directory.');
-    const [r] = await conn.query('INSERT INTO tec_committees (plan_item_id, appointed_on, due_date, notes, created_by) VALUES (?,?,?,?,?)',
-      [itemId, appointed, due, optString(req.body.notes, 2000), req.user.id]);
+    const [r] = await conn.query('INSERT INTO tec_committees (plan_item_id, appointed_on, due_date, letter_ref, notes, created_by) VALUES (?,?,?,?,?,?)',
+      [itemId, appointed, due, optString(req.body.letter_ref, 80), optString(req.body.notes, 2000), req.user.id]);
     for (const m of roster) await conn.query('INSERT INTO tec_assignments (committee_id, member_id, role) VALUES (?,?,?)', [r.insertId, m.member_id, m.role]);
     await markMilestone(conn, itemId, 'appoint_bec', appointed);
     await audit(conn, 'plan_item', itemId, 'tec-appointed', req.user.id, `TEC #${r.insertId}, ${roster.length} member(s), due ${due}`);
@@ -233,7 +239,9 @@ router.put('/committees/:id', requireRole(...PROC), wrap(async (req, res) => {
   const c = await activeCommittee(Number(req.params.id));
   const due = optDate(req.body.due_date, 'Due date') || c.due_date;
   if (due < c.appointed_on) throw new HttpError(400, 'The due date cannot be before the date of appointment.');
-  await pool.query('UPDATE tec_committees SET due_date = ?, notes = ? WHERE id = ?', [due, req.body.notes === undefined ? c.notes : optString(req.body.notes, 2000), c.id]);
+  await pool.query('UPDATE tec_committees SET due_date = ?, notes = ?, letter_ref = ? WHERE id = ?', [due,
+    req.body.notes === undefined ? c.notes : optString(req.body.notes, 2000),
+    req.body.letter_ref === undefined ? c.letter_ref : optString(req.body.letter_ref, 80), c.id]);
   if (due !== c.due_date) {
     await pool.query('UPDATE tec_assignments SET reminder_before_at = NULL, reminder_overdue_at = NULL WHERE committee_id = ? AND submitted_on IS NULL', [c.id]);
     await audit(null, 'plan_item', c.plan_item_id, 'tec-extended', req.user.id, `TEC #${c.id}: due ${c.due_date} -> ${due}`);
@@ -275,9 +283,9 @@ router.post('/committees/:id/cancel', requireRole(...PROC), wrap(async (req, res
 // Reminder sent now by the procurement unit to every member who has not submitted.
 router.post('/committees/:id/remind', requireRole(...PROC), wrap(async (req, res) => {
   const c = await activeCommittee(Number(req.params.id));
-  const t = today(); const org = await orgName();
+  const t = today(); const ctx = await mailContext();
   const statuses = [];
-  for (const a of await loadAssignments([c.id])) if (!a.submitted_on) statuses.push(await sendReminder(a, c, c.due_date < t ? 'overdue' : 'manual', t, org));
+  for (const a of await loadAssignments([c.id])) if (!a.submitted_on) statuses.push(await sendReminder(a, c, c.due_date < t ? 'overdue' : 'manual', t, ctx));
   if (!statuses.length) throw new HttpError(409, 'Every member has already submitted.');
   res.json({ ok: true, emails: statuses });
 }));
@@ -286,11 +294,35 @@ router.post('/assignments/:aid/resend-appointment', requireRole(...PROC), wrap(a
   res.json({ ok: true, email: await sendAppointment(Number(req.params.aid)) });
 }));
 
-router.put('/settings', requireRole('admin'), wrap(async (req, res) => {
-  const days = Number(req.body.reminder_days);
+// Reminder lead time and the signature block (name, designation, unit, organisation, phone, e-mail).
+router.put('/settings', requireRole(...PROC), wrap(async (req, res) => {
+  const cur = await settings();
+  const days = req.body.reminder_days === undefined ? cur.reminder_days : Number(req.body.reminder_days);
   if (!Number.isInteger(days) || days < 1 || days > 60) throw new HttpError(400, 'Reminder lead time must be 1-60 days.');
-  await pool.query("INSERT INTO settings (`key`, value) VALUES ('tec', ?) ON DUPLICATE KEY UPDATE value = VALUES(value)", [JSON.stringify({ reminder_days: days })]);
+  const sig = { ...cur.signature };
+  for (const k of tec.SIGNATURE_FIELDS) if (req.body.signature && req.body.signature[k] !== undefined) sig[k] = optString(req.body.signature[k], 160) || '';
+  if (sig.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sig.email)) throw new HttpError(400, 'Enter a valid e-mail address for the signature.');
+  await pool.query("INSERT INTO settings (`key`, value) VALUES ('tec', ?) ON DUPLICATE KEY UPDATE value = VALUES(value)", [JSON.stringify({ reminder_days: days, signature: sig })]);
+  await audit(null, 'settings', 'tec', 'update', req.user.id, null);
   res.json({ ok: true });
+}));
+
+// Sample appointment and reminder e-mails with the given (unsaved) signature and reference, for the preview.
+router.post('/preview', requireRole(...VIEW), wrap(async (req, res) => {
+  const cur = await settings();
+  const sig = { ...cur.signature, ...(req.body.signature || {}) };
+  const t = today();
+  const c = {
+    bid_no: 'T/2026/0001', ref_no: 'ENG-2026-0002', title: 'Supply of distribution transformers', department: 'Engineering & Projects', method: 'NCB',
+    appointed_on: t, due_date: rules.addDays(t, 21), letter_ref: optString(req.body.letter_ref, 80) || 'PROC/TEC/2026/001'
+  };
+  const org = await orgName();
+  const member = { name: 'A. B. Perera' };
+  res.json({
+    appointment: tec.appointmentMail({ member, role: 'chair', c, today: t, org, sig }),
+    reminder: tec.reminderMail({ member, c, kind: 'before', today: rules.addDays(c.due_date, -cur.reminder_days), org, sig }),
+    overdue: tec.reminderMail({ member, c, kind: 'overdue', today: rules.addDays(c.due_date, 1), org, sig })
+  });
 }));
 
 module.exports = router;

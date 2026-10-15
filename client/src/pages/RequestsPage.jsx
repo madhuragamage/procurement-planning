@@ -3,7 +3,7 @@ import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { Status, Msg, useAction } from '../components/ui.jsx';
-import { fmt, inclVat, YEAR_LABELS, PRIORITY, FUNDING_LABEL, REASON_LABEL, EXPENSE_LABEL, recurLabel, recurYears, phasingLabel } from '../lib/format.js';
+import { fmt, inclVat, YEAR_LABELS, PRIORITY, FUNDING_LABEL, REASON_LABEL, EXPENSE_LABEL, MAIN_CATEGORY_LABEL, recurLabel, recurYears, phasingLabel } from '../lib/format.js';
 
 const blank = fy => ({
   title: '', description: '', category_id: '', tce_excl_vat_mn: '', vat_pct: 18, funding_source: 'LECO', funding_agency: '', reason: 'New', reason_note: '',
@@ -45,10 +45,16 @@ function BudgetPhasing({ f, set }) {
 function RequestForm({ initial, onDone, onCancel }) {
   const { user } = useAuth();
   const { lookups } = useApp();
-  const [f, setF] = useState(initial);
+  const [f, setF] = useState(() => ({
+    ...initial, budget_code_id: initial.budget_code_id || '',
+    main_category: initial.manual_type || lookups.categories.find(c => c.id === Number(initial.category_id))?.manual_type || ''
+  }));
   const { busy, error, run } = useAction();
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const editing = !!initial.id;
+  const amending = editing && !['draft', 'returned'].includes(initial.status);
+  const subCategories = lookups.categories.filter(c => c.manual_type === f.main_category && (c.active || c.id === Number(f.category_id)));
+  const codes = lookups.budgetCodes.filter(b => b.expense_type === f.expense_type && (b.active || b.id === Number(f.budget_code_id)));
   const wide = ['procurement', 'admin'].includes(user.role);
   const ownSubUnit = user.role === 'requester' && user.sub_unit_id;
   const deptId = Number((wide && f.department_id) || f.department_id || user.department_id);
@@ -63,23 +69,37 @@ function RequestForm({ initial, onDone, onCancel }) {
 
   return (
     <form className="card" onSubmit={save} style={{ marginBottom: 18 }}>
-      <h2>{editing ? `Edit ${initial.ref_no}` : 'New procurement request'}</h2>
-      <p className="hint">Describe what your department needs. After your department head authorises it, the procurement unit assigns the method and schedule.</p>
+      <h2>{amending ? `Amend ${initial.ref_no} — ${initial.department}` : editing ? `Edit ${initial.ref_no}` : 'New procurement request'}</h2>
+      <p className="hint">{amending
+        ? 'You are amending a request the procurement unit has received. Changes are recorded in the request history and, if it is already in the plan, the plan item is updated too. Amendments are possible until the plan is submitted for approval.'
+        : 'Describe what your department needs. After your department head authorises it, the procurement unit assigns the method and schedule.'}</p>
       <Msg error={error} />
+      <label className="field"><span>Title</span>
+        <input type="text" value={f.title} onChange={e => set('title', e.target.value)} required maxLength={200} />
+      </label>
       <div className="grid g4">
-        <label className="field" style={{ gridColumn: 'span 2' }}><span>Title</span>
-          <input type="text" value={f.title} onChange={e => set('title', e.target.value)} required maxLength={200} />
-        </label>
-        <label className="field"><span>Category</span>
-          <select value={f.category_id} onChange={e => set('category_id', e.target.value)} required>
+        <label className="field"><span>Main procurement category</span>
+          <select value={f.main_category} onChange={e => setF(p => ({ ...p, main_category: e.target.value, category_id: '' }))} required>
             <option value="">Select…</option>
-            {lookups.categories.filter(c => c.active || c.id === f.category_id).map(c => <option key={c.id} value={c.id}>{c.name} ({c.manual_type})</option>)}
+            {lookups.mainCategories.map(m => <option key={m} value={m}>{MAIN_CATEGORY_LABEL[m]}</option>)}
           </select>
         </label>
-        <label className="field"><span>CAPEX / OPEX</span>
-          <select value={f.expense_type} onChange={e => set('expense_type', e.target.value)} required>
+        <label className="field"><span>Sub category</span>
+          <select value={f.category_id} onChange={e => set('category_id', e.target.value)} required disabled={!f.main_category}>
+            <option value="">{f.main_category ? 'Select…' : 'choose the main category first'}</option>
+            {subCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </label>
+        <label className="field"><span>Budget category</span>
+          <select value={f.expense_type} onChange={e => setF(p => ({ ...p, expense_type: e.target.value, budget_code_id: '' }))} required>
             <option value="">Select…</option>
             {lookups.expenseTypes.map(x => <option key={x} value={x}>{EXPENSE_LABEL[x]}</option>)}
+          </select>
+        </label>
+        <label className="field"><span>Budget code</span>
+          <select value={f.budget_code_id} onChange={e => set('budget_code_id', e.target.value)} disabled={!f.expense_type} required={codes.some(b => b.active)}>
+            <option value="">{!f.expense_type ? 'choose the budget category first' : codes.length ? 'Select…' : 'no codes set up for this category'}</option>
+            {codes.map(b => <option key={b.id} value={b.id}>{b.code} — {b.description}</option>)}
           </select>
         </label>
       </div>
@@ -104,11 +124,10 @@ function RequestForm({ initial, onDone, onCancel }) {
             {lookups.reasons.map(r => <option key={r} value={r}>{REASON_LABEL[r]}</option>)}
           </select>
         </label>
-        {f.reason === 'Other' && (
-          <label className="field"><span>Specify the reason</span>
-            <input type="text" value={f.reason_note || ''} onChange={e => set('reason_note', e.target.value)} maxLength={200} required />
-          </label>
-        )}
+        <label className="field"><span>Specify the reason{f.reason === 'Other' ? '' : ' (optional)'}</span>
+          <input type="text" value={f.reason_note || ''} onChange={e => set('reason_note', e.target.value)} maxLength={200} required={f.reason === 'Other'}
+            placeholder={f.reason === 'Projects-ADB' || f.reason === 'Projects-LECO' ? 'e.g. project name / package' : f.reason === 'ROL' ? 'e.g. item code, stock level' : ''} />
+        </label>
       </div>
       <label className="field"><span>Scope / quantity / justification</span>
         <textarea rows={3} value={f.description || ''} onChange={e => set('description', e.target.value)} />
@@ -184,7 +203,7 @@ function RequestForm({ initial, onDone, onCancel }) {
 
 export default function RequestsPage() {
   const { user } = useAuth();
-  const { fy } = useApp();
+  const { fy, lookups } = useApp();
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
@@ -201,13 +220,17 @@ export default function RequestsPage() {
 
   const shown = rows.filter(r => !statusFilter || r.status === statusFilter);
   const canWrite = ['requester', 'dept_head', 'procurement', 'admin'].includes(user.role);
+  const procHead = !!lookups.me?.procurement_head;
+  const toAmend = rows.filter(r => r.can_amend).length;
 
   return (
     <div>
       <div className="between" style={{ marginBottom: 14 }}>
         <div>
           <h2 style={{ margin: 0 }}>Procurement requests</h2>
-          <span className="hint" style={{ margin: 0 }}>{['procurement', 'admin', 'management', 'executive'].includes(user.role) ? 'All departments' : user.department + (user.sub_unit ? ' / ' + user.sub_unit : '')}</span>
+          <span className="hint" style={{ margin: 0 }}>{['procurement', 'admin', 'management', 'executive'].includes(user.role) ? 'All departments'
+            : procHead ? `${user.department}, plus every request received by the procurement unit` : user.department + (user.sub_unit ? ' / ' + user.sub_unit : '')}</span>
+          {toAmend > 0 && <div className="hint" style={{ margin: '2px 0 0' }}>{toAmend} received request{toAmend > 1 ? 's' : ''} can still be amended by the procurement unit (until the plan is submitted for approval).</div>}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ width: 'auto' }}>
@@ -223,20 +246,21 @@ export default function RequestsPage() {
       <div className="card">
         {shown.length === 0 ? <div className="empty">No requests yet.</div> : (
           <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
-            <thead><tr><th>Ref</th><th>Title</th><th>Unit</th><th>Category</th><th>Type</th><th>Reason</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Funding</th><th>Cycle</th><th>Required</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Ref</th><th>Title</th><th>Unit</th><th>Category</th><th>Budget</th><th>Reason</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Funding</th><th>Cycle</th><th>Required</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {shown.map(r => (
                 <Fragment key={r.id}>
                   <tr>
                     <td><button className="link" onClick={() => setOpenId(openId === r.id ? null : r.id)}>{r.ref_no}</button></td>
                     <td className="wrap">{r.title}</td><td>{r.department}{r.sub_unit ? ' / ' + r.sub_unit : ''}</td><td>{r.category}</td>
-                    <td>{r.expense_type}{r.recurrence === 'recurrent' && <span className="pill warn" style={{ marginLeft: 4 }} title={recurLabel(r)}>+{Number(r.annual_increase_pct)}%/yr</span>}{phasingLabel(r) && <span className="pill warn" style={{ marginLeft: 4 }} title={'Budget phasing: ' + phasingLabel(r)}>phased</span>}</td>
+                    <td>{r.expense_type}{r.budget_code && <div className="hint" style={{ margin: 0 }} title={r.budget_code_desc}>{r.budget_code}</div>}{r.recurrence === 'recurrent' && <span className="pill warn" style={{ marginLeft: 4 }} title={recurLabel(r)}>+{Number(r.annual_increase_pct)}%/yr</span>}{phasingLabel(r) && <span className="pill warn" style={{ marginLeft: 4 }} title={'Budget phasing: ' + phasingLabel(r)}>phased</span>}</td>
                     <td>{r.reason}{r.reason_note ? ': ' + r.reason_note : ''}</td>
                     <td style={{ textAlign: 'right' }}>{fmt(inclVat(r.tce_excl_vat_mn, r.vat_pct))}</td><td>{FUNDING_LABEL[r.funding_source]}</td>
                     <td>{r.plan_fy}+{r.year_offset}</td><td>{r.required_date}</td>
                     <td><Status value={r.status} />{r.plan_item_id ? <span className="pill ok" style={{ marginLeft: 4 }}>in plan</span> : null}</td>
                     <td style={{ display: 'flex', gap: 6 }}>
                       {['draft', 'returned'].includes(r.status) && canWrite && <button className="mini plain" onClick={() => setForm(r)}>edit</button>}
+                      {r.can_amend && <button className="mini plain" title="Amend before the plan is submitted for approval" onClick={() => { setForm(r); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>amend</button>}
                       {['draft', 'returned'].includes(r.status) && canWrite && <button className="mini plain" disabled={busy} onClick={async () => { await run(() => api.post(`/requests/${r.id}/submit`), `${r.ref_no} submitted to your department head.`); load(); }}>submit</button>}
                       {r.status === 'draft' && canWrite && <button className="mini" disabled={busy} onClick={async () => { if (confirm(`Delete draft ${r.ref_no}?`)) { await run(() => api.del('/requests/' + r.id)); load(); } }}>delete</button>}
                     </td>
@@ -245,7 +269,7 @@ export default function RequestsPage() {
                     <tr><td colSpan={12} style={{ background: 'var(--panel-2)' }}>
                       {detail.description && <p style={{ margin: '4px 0', fontFamily: 'var(--body)' }}>{detail.description}</p>}
                       {r.review_comment && <p className="hint" style={{ margin: '4px 0' }}>Reviewer comment: {r.review_comment}</p>}
-                      <div className="hint" style={{ margin: '4px 0' }}>Requested by {detail.requested_by_name}{detail.authorised_by_name ? ` · authorised by ${detail.authorised_by_name}` : ''} · {FUNDING_LABEL[detail.funding_source]}{detail.funding_agency ? ` (${detail.funding_agency})` : ''} · priority {PRIORITY[detail.priority]} · {EXPENSE_LABEL[detail.expense_type]} · {recurLabel(detail)}{phasingLabel(detail) ? ` · budget phasing ${phasingLabel(detail)}` : ''}</div>
+                      <div className="hint" style={{ margin: '4px 0' }}>Requested by {detail.requested_by_name}{detail.authorised_by_name ? ` · authorised by ${detail.authorised_by_name}` : ''} · {FUNDING_LABEL[detail.funding_source]}{detail.funding_agency ? ` (${detail.funding_agency})` : ''} · priority {PRIORITY[detail.priority]} · {EXPENSE_LABEL[detail.expense_type]}{detail.budget_code ? ` — budget code ${detail.budget_code} ${detail.budget_code_desc}` : ""} · {recurLabel(detail)}{phasingLabel(detail) ? ` · budget phasing ${phasingLabel(detail)}` : ''}</div>
                       <div className="hint" style={{ margin: '4px 0' }}>{detail.history.map(h => `${h.at.slice(0, 16).replace('T', ' ')} ${h.action} by ${h.user || '-'}${h.comment ? ' — ' + h.comment : ''}`).join('  |  ')}</div>
                     </td></tr>
                   )}

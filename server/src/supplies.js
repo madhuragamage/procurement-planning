@@ -87,6 +87,34 @@ function steps(c, settings, today) {
   };
 }
 
+// Progress of a file against its delivery target. actual = share of its applicable steps recorded; expected =
+// share of the time from acceptance (or receipt) to the delivery date that has already passed. A file is
+// "behind" when actual trails expected by more than 10 points, "overdue" once the delivery date passes undelivered.
+function deliveryProgress(c, settings, today) {
+  const st = steps(c, settings, today);
+  const delivered = (c.steps && c.steps.goods_delivered && c.steps.goods_delivered.date) || null;
+  const start = c.accepted_on || c.forwarded_on;
+  const target = c.delivery_date || null;
+  let expected = null;
+  if (target && start) {
+    const span = diffDays(start, target);
+    expected = span <= 0 ? 100 : Math.max(0, Math.min(100, Math.round((diffDays(start, today) / span) * 100)));
+  }
+  let state;
+  if (delivered) state = target && delivered > target ? 'delivered_late' : 'delivered';
+  else if (c.status === 'forwarded') state = 'to_accept';
+  else if (!target) state = 'no_target';
+  else if (today > target) state = 'overdue';
+  else if (expected != null && st.pct + 10 < expected) state = 'behind';
+  else state = 'on_track';
+  return {
+    actual_pct: st.pct, expected_pct: delivered ? 100 : expected, start, target, delivered,
+    days_left: target && !delivered ? diffDays(today, target) : null,
+    late_days: delivered && target ? Math.max(0, diffDays(target, delivered)) : (target && !delivered && today > target ? diffDays(target, today) : 0),
+    state, next: st.next ? st.next.label : null, overdue_steps: st.overdue.length
+  };
+}
+
 // Performance Bond is valid until delivery + N days unless set otherwise.
 const pbValidity = (deliveryDate, settings) => deliveryDate ? addDays(deliveryDate, (settings && settings.pb_validity_extra_days) || DEFAULTS.pb_validity_extra_days) : null;
 
@@ -121,4 +149,4 @@ function bondExpiryMail({ b, c, today }) {
   };
 }
 
-module.exports = { DEFAULTS, STEPS, STEP_KEYS, addWorkingDays, steps, pbValidity, isImport, supplierReminderMail, deliveryReminderMail, bondExpiryMail };
+module.exports = { DEFAULTS, STEPS, STEP_KEYS, addWorkingDays, steps, deliveryProgress, pbValidity, isImport, supplierReminderMail, deliveryReminderMail, bondExpiryMail };

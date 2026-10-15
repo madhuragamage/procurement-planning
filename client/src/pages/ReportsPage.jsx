@@ -3,7 +3,7 @@ import { api, qs } from '../api.js';
 import { useApp } from '../context/AppContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import ReportTable from '../components/ReportTable.jsx';
-import { YEAR_LABELS, canSeeSupplies } from '../lib/format.js';
+import { YEAR_LABELS, canSeeSupplies, MAIN_CATEGORY_LABEL } from '../lib/format.js';
 
 const REPORTS = [
   ['mpp', 'Master Procurement Plan (MPP) — Annex I'],
@@ -27,7 +27,7 @@ const REPORTS = [
 export default function ReportsPage() {
   const { fy, lookups } = useApp();
   const { user } = useAuth();
-  const [type, setType] = useState('mpp');
+  const [type, setType] = useState(user.role === 'supplies' ? 'supplies:status' : 'mpp');
   const [dept, setDept] = useState('');
   const [cat, setCat] = useState('');
   const [expense, setExpense] = useState('');
@@ -44,7 +44,8 @@ export default function ReportsPage() {
   }, [type, fy, dept, cat, expense, quarter, yearOffset]);
 
   const filterable = type !== 'budget' && !type.startsWith('supplies:');
-  const reports = REPORTS.filter(([k]) => !k.startsWith('supplies:') || canSeeSupplies(user, lookups));
+  // Supplies Unit officers only see the Supplies reports (their own files).
+  const reports = REPORTS.filter(([k]) => (user.role === 'supplies' ? k.startsWith('supplies:') : !k.startsWith('supplies:') || canSeeSupplies(user, lookups)));
 
   return (
     <div>
@@ -55,8 +56,8 @@ export default function ReportsPage() {
           {filterable && <label className="field"><span>Department</span>
             <select value={dept} onChange={e => setDept(e.target.value)}><option value="">All</option>{lookups.departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>}
           {filterable && <label className="field"><span>Category</span>
-            <select value={cat} onChange={e => setCat(e.target.value)}><option value="">All</option>{lookups.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
-          {!type.startsWith('supplies:') && <label className="field"><span>CAPEX / OPEX</span>
+            <select value={cat} onChange={e => setCat(e.target.value)}><option value="">All</option>{lookups.categories.map(c => <option key={c.id} value={c.id}>{MAIN_CATEGORY_LABEL[c.manual_type]} / {c.name}</option>)}</select></label>}
+          {!type.startsWith('supplies:') && <label className="field"><span>Budget category</span>
             <select value={expense} onChange={e => setExpense(e.target.value)}><option value="">Both</option>{lookups.expenseTypes.map(x => <option key={x} value={x}>{x}</option>)}</select></label>}
           {type === 'year-plan' && <label className="field"><span>Year</span>
             <select value={yearOffset} onChange={e => setYearOffset(Number(e.target.value))}>{YEAR_LABELS(fy).map((l, i) => <option key={i} value={i}>{l}</option>)}</select></label>}

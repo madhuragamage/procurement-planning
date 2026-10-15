@@ -62,3 +62,19 @@ test('custom weeks are cumulative from the start date', () => {
   assert.strictEqual(d.signing, rules.addDays('2027-01-04', 11 * 7));
   assert.strictEqual(d.completion, rules.addDays('2027-01-04', 21 * 7));
 });
+
+test('delivery progress compares steps done with time elapsed to the delivery target', () => {
+  const base = { status: 'accepted', payment_mode: 'local', forwarded_on: '2027-01-01', accepted_on: '2027-01-01', delivery_date: '2027-03-02', steps: { file_received: { date: '2027-01-01' }, accepted: { date: '2027-01-01' } } };
+  const half = sup.deliveryProgress(base, {}, '2027-01-31');            // 30 of 60 days gone
+  assert.strictEqual(half.expected_pct, 50);
+  assert.strictEqual(half.state, 'behind');                              // only 2 of the steps done
+  assert.strictEqual(half.days_left, 30);
+  const allDone = Object.fromEntries(sup.STEPS.map(s => [s.key, { date: '2027-01-20' }]));
+  assert.strictEqual(sup.deliveryProgress({ ...base, steps: { ...allDone, goods_delivered: undefined } }, {}, '2027-01-31').state, 'on_track');
+  const late = sup.deliveryProgress(base, {}, '2027-03-12');
+  assert.strictEqual(late.state, 'overdue');
+  assert.strictEqual(late.late_days, 10);
+  const deliveredLate = sup.deliveryProgress({ ...base, steps: { ...base.steps, goods_delivered: { date: '2027-03-05' } } }, {}, '2027-03-12');
+  assert.deepStrictEqual([deliveredLate.state, deliveredLate.late_days, deliveredLate.expected_pct], ['delivered_late', 3, 100]);
+  assert.strictEqual(sup.deliveryProgress({ ...base, status: 'forwarded', accepted_on: null }, {}, '2027-01-05').state, 'to_accept');
+});

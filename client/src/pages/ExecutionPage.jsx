@@ -192,9 +192,12 @@ function AfterAcceptance({ item, contract, onDone }) {
   const { user } = useAuth();
   const [bidType, setBidType] = useState(suggestBidType(item.method));
   const [note, setNote] = useState('');
+  const [officerId, setOfficerId] = useState('');
+  const [officers, setOfficers] = useState([]);
   const { busy, error, ok, run, setError } = useAction();
   const isProc = ['procurement', 'admin'].includes(user.role);
   const awarded = ['awarded', 'completed'].includes(item.status) || !!item.milestones?.contract_award?.actual;
+  useEffect(() => { if (isProc && item.bid_no && !contract && awarded) api.get('/supplies/officers').then(setOfficers).catch(() => {}); }, [isProc, item.bid_no, contract, awarded]);
   if (!isProc && !contract) return null;
   return (
     <div className="card" style={{ marginTop: 14 }}>
@@ -222,8 +225,14 @@ function AfterAcceptance({ item, contract, onDone }) {
           <h2>Forward to the Supplies Department</h2>
           <p className="hint">{awarded ? 'The award has been made. Forward the procurement file so the Supplies Department can take over (performance bond, P/Order, delivery).' : 'Available once the award is made: record the contract award date above, or set the status to awarded.'}</p>
           {awarded && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <input type="text" placeholder="Note to the Supplies Department (optional)" value={note} onChange={e => setNote(e.target.value)} style={{ flex: '1 1 260px', width: 'auto' }} />
-            <button className="primary" disabled={busy} onClick={async () => { if (await run(() => api.post('/supplies/forward', { plan_item_id: item.id, note }), `${item.bid_no}: file forwarded to the Supplies Department.`)) onDone(); }}>Forward file</button>
+            <select value={officerId} onChange={e => setOfficerId(e.target.value)} style={{ width: 'auto' }} title="The Supplies Unit officer who will handle this file">
+              <option value="">Supplies Unit in-tray (any officer)</option>{officers.map(o => <option key={o.id} value={o.id}>To {o.name}</option>)}
+            </select>
+            <input type="text" placeholder="Note to the Supplies Unit (optional)" value={note} onChange={e => setNote(e.target.value)} style={{ flex: '1 1 260px', width: 'auto' }} />
+            <button className="primary" disabled={busy} onClick={async () => {
+              const who = officers.find(o => String(o.id) === officerId);
+              if (await run(() => api.post('/supplies/forward', { plan_item_id: item.id, note, officer_id: officerId || undefined }), `${item.bid_no}: file forwarded to ${who ? who.name : 'the Supplies Unit in-tray'}.`)) onDone();
+            }}>Forward file</button>
           </div>}
         </>
       )}

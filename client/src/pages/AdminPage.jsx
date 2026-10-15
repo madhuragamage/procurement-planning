@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useApp } from '../context/AppContext.jsx';
 import { Msg, useAction } from '../components/ui.jsx';
-import { ROLE_LABEL } from '../lib/format.js';
+import { ROLE_LABEL, MAIN_CATEGORY_LABEL, EXPENSE_LABEL } from '../lib/format.js';
 
 const ROLES = Object.keys(ROLE_LABEL);
 const blankUser = { name: '', email: '', role: 'requester', department_id: '', sub_unit_id: '', password: '' };
@@ -134,20 +134,71 @@ function Categories() {
   const go = async (fn, msg) => { await run(fn, msg); reload(); };
   return (
     <div className="card">
-      <h2>Categories</h2>
-      <p className="hint">The manual type decides which Shopping limits and reporting group (Goods / Works / Non-consulting services) applies. The procurement unit can also add categories.</p>
+      <h2>Procurement categories</h2>
+      <p className="hint">Main procurement category → sub category. The main category also decides the Shopping limits and reporting group (consultancy services use the services limits). The procurement unit can also add sub categories.</p>
       <Msg error={error} ok={ok} />
-      <form className="addrow" onSubmit={async e => { e.preventDefault(); await go(() => api.post('/lookups/categories', cat), 'Category added.'); setCat({ name: '', manual_type: 'goods' }); }}>
-        <input type="text" placeholder="Category name" value={cat.name} onChange={e => setCat({ ...cat, name: e.target.value })} required />
-        <select value={cat.manual_type} onChange={e => setCat({ ...cat, manual_type: e.target.value })}><option value="goods">Goods</option><option value="works">Works</option><option value="services">Services</option></select>
+      <form className="addrow" onSubmit={async e => { e.preventDefault(); await go(() => api.post('/lookups/categories', cat), 'Sub category added.'); setCat({ ...cat, name: '' }); }}>
+        <select value={cat.manual_type} onChange={e => setCat({ ...cat, manual_type: e.target.value })}>{lookups.mainCategories.map(m => <option key={m} value={m}>{MAIN_CATEGORY_LABEL[m]}</option>)}</select>
+        <input type="text" placeholder="New sub category" value={cat.name} onChange={e => setCat({ ...cat, name: e.target.value })} required />
         <button className="primary" disabled={busy}>Add</button>
       </form>
-      <div className="tbl-wrap" style={{ maxHeight: 360 }}><table><tbody>
-        {lookups.categories.map(c => <tr key={c.id}><td>{c.name}</td>
-          <td><select value={c.manual_type} onChange={e => go(() => api.put('/lookups/categories/' + c.id, { manual_type: e.target.value }), 'Updated.')}>
-            <option value="goods">Goods</option><option value="works">Works</option><option value="services">Services</option></select></td>
-          <td><label className="chk" style={{ padding: 0 }}><input type="checkbox" checked={!!c.active} onChange={() => go(() => api.put('/lookups/categories/' + c.id, { active: !c.active }), 'Updated.')} /> active</label></td></tr>)}
-      </tbody></table></div>
+      {lookups.mainCategories.map((m, n) => (
+        <div key={m}>
+          <div className="section-title">{n + 1}. {MAIN_CATEGORY_LABEL[m]}</div>
+          <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table><tbody>
+            {lookups.categories.filter(c => c.manual_type === m).map(c => <tr key={c.id} style={c.active ? undefined : { opacity: 0.55 }}><td>{c.name}</td>
+              <td><label className="chk" style={{ padding: 0 }}><input type="checkbox" checked={!!c.active} onChange={() => go(() => api.put('/lookups/categories/' + c.id, { active: !c.active }), 'Updated.')} /> active</label></td></tr>)}
+          </tbody></table></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Budget codes under each Budget Category; users pick one on the request.
+function BudgetCodes() {
+  const { lookups, reload } = useApp();
+  const [f, setF] = useState({ expense_type: 'CAPEX', code: '', description: '' });
+  const [edit, setEdit] = useState({});
+  const { busy, error, ok, run } = useAction();
+  const go = async (fn, msg) => { const out = await run(fn, msg); await reload(); return out; };
+  return (
+    <div className="card">
+      <h2>Budget codes</h2>
+      <p className="hint">Each code belongs to a Budget Category (CAPEX, OPEX or Inventory). On a request, the user picks the Budget Category and then one of its codes; once a category has codes, choosing one is required. Retire a code by unticking "active".</p>
+      <Msg error={error} ok={ok} />
+      <form className="addrow" onSubmit={async e => { e.preventDefault(); if (await go(() => api.post('/lookups/budget-codes', f), `Budget code ${f.code} added.`)) setF({ ...f, code: '', description: '' }); }}>
+        <select value={f.expense_type} onChange={e => setF({ ...f, expense_type: e.target.value })}>{lookups.expenseTypes.map(x => <option key={x} value={x}>{EXPENSE_LABEL[x]}</option>)}</select>
+        <input type="text" placeholder="Budget code" value={f.code} onChange={e => setF({ ...f, code: e.target.value })} required style={{ width: 130 }} />
+        <input type="text" placeholder="Description" value={f.description} onChange={e => setF({ ...f, description: e.target.value })} required style={{ flex: 1 }} />
+        <button className="primary" disabled={busy}>Add</button>
+      </form>
+      {lookups.expenseTypes.map(t => {
+        const list = lookups.budgetCodes.filter(b => b.expense_type === t);
+        return (
+          <div key={t}>
+            <div className="section-title">{EXPENSE_LABEL[t]}</div>
+            {list.length === 0 ? <div className="hint">No codes yet.</div> : (
+              <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
+                <thead><tr><th>Budget code</th><th>Description</th><th>Active</th><th></th></tr></thead>
+                <tbody>{list.map(b => {
+                  const e = edit[b.id];
+                  return (
+                    <tr key={b.id} style={b.active ? undefined : { opacity: 0.55 }}>
+                      <td>{e ? <input type="text" value={e.code} onChange={ev => setEdit({ ...edit, [b.id]: { ...e, code: ev.target.value } })} style={{ width: 120 }} /> : b.code}</td>
+                      <td className="wrap">{e ? <input type="text" value={e.description} onChange={ev => setEdit({ ...edit, [b.id]: { ...e, description: ev.target.value } })} /> : b.description}</td>
+                      <td><input type="checkbox" checked={!!b.active} onChange={() => go(() => api.put('/lookups/budget-codes/' + b.id, { active: !b.active }), 'Updated.')} style={{ width: 16 }} /></td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{e
+                        ? <><button className="mini plain" disabled={busy} onClick={async () => { if (await go(() => api.put('/lookups/budget-codes/' + b.id, e), 'Budget code updated.')) setEdit({ ...edit, [b.id]: undefined }); }}>save</button> <button className="mini" onClick={() => setEdit({ ...edit, [b.id]: undefined })}>cancel</button></>
+                        : <button className="mini plain" onClick={() => setEdit({ ...edit, [b.id]: { code: b.code, description: b.description } })}>edit</button>}</td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table></div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -247,13 +298,14 @@ export default function AdminPage() {
   return (
     <div>
       <div className="tabbar">
-        {[['users', 'Users'], ['org', 'Divisions, departments & sub units'], ['categories', 'Categories'], ['settings', 'Limits, reminders & organisation'], ['audit', 'Audit trail']].map(([k, l]) => (
+        {[['users', 'Users'], ['org', 'Divisions, departments & sub units'], ['categories', 'Procurement categories'], ['budget-codes', 'Budget codes'], ['settings', 'Limits, reminders & organisation'], ['audit', 'Audit trail']].map(([k, l]) => (
           <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
       {tab === 'users' && <Users />}
       {tab === 'org' && <Org />}
       {tab === 'categories' && <Categories />}
+      {tab === 'budget-codes' && <BudgetCodes />}
       {tab === 'settings' && <Settings />}
       {tab === 'audit' && <Audit />}
     </div>

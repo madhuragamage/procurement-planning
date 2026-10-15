@@ -25,6 +25,12 @@ app.use('/api/auth', require('./routes/auth'));
 
 // Everything below needs a signed-in user.
 app.use('/api', requireAuth);
+// Supplies Unit officers work only with the files forwarded to them: the Supplies API and reference data.
+app.use('/api', (req, res, next) => {
+  if (req.user.role !== 'supplies') return next();
+  if (req.path.startsWith('/supplies') || (req.method === 'GET' && /^\/lookups\/?$/.test(req.path))) return next();
+  res.status(403).json({ error: 'Supplies Unit users can only access Supplies files.' });
+});
 app.use('/api/users', require('./routes/users'));
 app.use('/api/lookups', require('./routes/lookups'));
 app.use('/api/requests', require('./routes/requests'));

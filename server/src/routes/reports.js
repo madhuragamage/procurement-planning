@@ -5,6 +5,7 @@ const { wrap, HttpError, isWide } = require('../util');
 const lib = require('../planLib');
 const { availability } = require('./budgets');
 const phasing = require('../phasing');
+const { EXPENSE_TYPES } = require('../recurrence');
 
 const router = express.Router();
 
@@ -12,8 +13,8 @@ const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const incl = it => rules.tceInclVat(it.tce_excl_vat_mn, it.vat_pct);
 const money = { align: 'right' };
 const YEAR_LABELS = fy => [`${fy} (Annual)`, `${fy + 1} (Tentative)`, `${fy + 2} (Tentative)`];
-const TYPE_ORDER = { goods: 0, works: 1, services: 2 };
-const TYPE_LABEL = { goods: 'Goods', works: 'Works', services: 'Non-consulting services' };
+const TYPE_ORDER = { goods: 0, works: 1, services: 2, consultancy: 3 };
+const TYPE_LABEL = { goods: 'Goods', works: 'Works', services: 'Non-Consultancy Services', consultancy: 'Consultancy Services' };
 
 async function meta(fy) {
   const plan = await lib.getPlan(fy);
@@ -40,7 +41,7 @@ function totalsRow(rows, keys, label = 'Total') {
 
 const base = it => ({
   ref_no: it.ref_no, title: it.title, department: it.department, division: it.division || '', sub_unit: it.sub_unit || '', reason: it.reason + (it.reason_note ? ` (${it.reason_note})` : ''), category: it.category, type: TYPE_LABEL[it.manual_type],
-  expense: it.expense_type, recurrence: recurLabel(it),
+  expense: it.expense_type, budget_code: it.budget_code ? `${it.budget_code} ${it.budget_code_desc}` : '', recurrence: recurLabel(it),
   method: it.method || '', committee: it.committee_level || '', funding: it.funding_source + (it.funding_agency ? ` (${it.funding_agency})` : ''),
   tce_excl: r2(it.tce_excl_vat_mn), tce_incl: r2(incl(it)), start: it.procurement_start || '', delivery: it.expected_delivery || ''
 });
@@ -58,7 +59,7 @@ const BUILDERS = {
     const hasLater = rows.some(r => r.later);
     return {
       title: `Master Procurement Plan ${fy}-${fy + 2} (Annex I format)`, subtitle: 'Three-year rolling plan; year 1 is the annual plan, years 2-3 are tentative. Year columns show the budget required in each year (phased procurements are spread over their years). Values in LKR million.',
-      columns: [{ key: 'no', label: 'No.' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description of procurement' }, { key: 'department', label: 'Department' }, { key: 'sub_unit', label: 'Sub unit' }, { key: 'type', label: 'Type' }, { key: 'category', label: 'Category' }, { key: 'expense', label: 'CAPEX / OPEX' }, { key: 'recurrence', label: 'Recurrence' }, { key: 'reason', label: 'Reason' },
+      columns: [{ key: 'no', label: 'No.' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description of procurement' }, { key: 'department', label: 'Department' }, { key: 'sub_unit', label: 'Sub unit' }, { key: 'type', label: 'Type' }, { key: 'category', label: 'Category' }, { key: 'expense', label: 'Budget category' }, { key: 'budget_code', label: 'Budget code' }, { key: 'recurrence', label: 'Recurrence' }, { key: 'reason', label: 'Reason' },
         { key: 'method', label: 'Method' }, { key: 'committee', label: 'Committee' }, { key: 'funding', label: 'Funding' }, { key: 'tce_excl', label: 'TCE excl. VAT', ...money }, { key: 'vat', label: 'VAT', ...money }, { key: 'tce_incl', label: 'TCE incl. VAT', ...money },
         { key: 'phasing', label: 'Budget phasing' }, { key: 'y0', label: y[0], ...money }, { key: 'y1', label: y[1], ...money }, { key: 'y2', label: y[2], ...money },
         ...(hasLater ? [{ key: 'later', label: `After ${fy + 2}`, ...money }] : []), { key: 'start', label: 'Procurement start' }, { key: 'delivery', label: 'Expected delivery' }],
@@ -72,7 +73,7 @@ const BUILDERS = {
     }));
     return {
       title: `Annual Procurement Plan ${fy} (Annex II format)`, subtitle: 'Procurement planned for the coming financial year. Values in LKR million.',
-      columns: [{ key: 'no', label: 'No.' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description' }, { key: 'department', label: 'Department' }, { key: 'sub_unit', label: 'Sub unit' }, { key: 'type', label: 'Type' }, { key: 'expense', label: 'CAPEX / OPEX' }, { key: 'recurrence', label: 'Recurrence' }, { key: 'reason', label: 'Reason' }, { key: 'method', label: 'Method' }, { key: 'procedure', label: 'Procedure' }, { key: 'pq', label: 'PQ' },
+      columns: [{ key: 'no', label: 'No.' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description' }, { key: 'department', label: 'Department' }, { key: 'sub_unit', label: 'Sub unit' }, { key: 'type', label: 'Type' }, { key: 'expense', label: 'Budget category' }, { key: 'budget_code', label: 'Budget code' }, { key: 'recurrence', label: 'Recurrence' }, { key: 'reason', label: 'Reason' }, { key: 'method', label: 'Method' }, { key: 'procedure', label: 'Procedure' }, { key: 'pq', label: 'PQ' },
         { key: 'committee', label: 'Committee' }, { key: 'funding', label: 'Funding' }, { key: 'priority', label: 'Priority' }, { key: 'tce_excl', label: 'TCE excl. VAT', ...money }, { key: 'tce_incl', label: 'TCE incl. VAT', ...money }, { key: 'start', label: 'Start' }, { key: 'delivery', label: 'Delivery' }],
       rows: [...rows, totalsRow(rows, ['tce_excl', 'tce_incl'])]
     };
@@ -90,7 +91,7 @@ const BUILDERS = {
     });
     const keys = ['tce_excl', 'vat', 'tce_incl', 'budget_year'];
     const rows = []; let n = 0;
-    for (const type of ['CAPEX', 'OPEX']) {
+    for (const type of EXPENSE_TYPES) {
       const part = items.filter(i => i.year_offset === offset && i.expense_type === type).sort(order).map(row);
       if (part.length) rows.push(...part, totalsRow(part, keys, `Subtotal ${type} — starting in ${year}`));
     }
@@ -102,7 +103,7 @@ const BUILDERS = {
       title: `Procurement plan for ${year}${offset === 0 ? ' (annual plan)' : ` (tentative, ${fy}-${fy + 2} cycle)`}`,
       subtitle: `Procurements planned to start in ${year}, grouped by CAPEX and OPEX, followed by phased procurements started earlier in the cycle that still need budget in ${year}. "Required in ${year}" is the budget share for that year. Values in LKR million.`,
       columns: [{ key: 'no', label: 'No.' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description of procurement' }, { key: 'department', label: 'Department' }, { key: 'sub_unit', label: 'Sub unit' },
-        { key: 'expense', label: 'CAPEX / OPEX' }, { key: 'category', label: 'Category' }, { key: 'reason', label: 'Reason' }, { key: 'recurrence', label: 'Recurrence' },
+        { key: 'expense', label: 'Budget category' }, { key: 'budget_code', label: 'Budget code' }, { key: 'category', label: 'Category' }, { key: 'reason', label: 'Reason' }, { key: 'recurrence', label: 'Recurrence' },
         { key: 'method', label: 'Method' }, { key: 'procedure', label: 'Procedure' }, { key: 'committee', label: 'Committee' }, { key: 'funding', label: 'Funding' }, { key: 'priority', label: 'Priority' },
         { key: 'tce_excl', label: 'TCE excl. VAT', ...money }, { key: 'vat', label: 'VAT', ...money }, { key: 'tce_incl', label: 'TCE incl. VAT', ...money },
         { key: 'phasing', label: 'Budget phasing' }, { key: 'budget_year', label: `Required in ${year}`, ...money }, { key: 'start', label: 'Start' }, { key: 'delivery', label: 'Delivery' }],
@@ -195,7 +196,7 @@ const BUILDERS = {
     rows.push(totalsRow(sorted.map(base), ['tce_incl'], 'Grand total'));
     return {
       title: `Procurement plan ${fy}-${fy + 2} by category`, subtitle: 'Category-wise listing with subtotals. Values in LKR million.',
-      columns: [{ key: 'category', label: 'Category' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description' }, { key: 'department', label: 'Department' }, { key: 'expense', label: 'CAPEX / OPEX' }, { key: 'year', label: 'Plan year' }, { key: 'method', label: 'Method' }, { key: 'tce_incl', label: 'TCE incl. VAT', ...money }, { key: 'start', label: 'Start' }, { key: 'delivery', label: 'Delivery' }],
+      columns: [{ key: 'category', label: 'Category' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Description' }, { key: 'department', label: 'Department' }, { key: 'expense', label: 'Budget category' }, { key: 'budget_code', label: 'Budget code' }, { key: 'year', label: 'Plan year' }, { key: 'method', label: 'Method' }, { key: 'tce_incl', label: 'TCE incl. VAT', ...money }, { key: 'start', label: 'Start' }, { key: 'delivery', label: 'Delivery' }],
       rows
     };
   },
@@ -292,17 +293,17 @@ router.get('/budget', wrap(async (req, res) => {
   const year = Number(req.query.year);
   if (!Number.isInteger(year)) throw new HttpError(400, 'year is required.');
   const data = (await availability(year)).filter(d => isWide(req.user) || d.department_id === req.user.department_id);
-  const types = ['CAPEX', 'OPEX'].filter(t => !req.query.expense_type || t === req.query.expense_type);
+  const types = EXPENSE_TYPES.filter(t => !req.query.expense_type || t === req.query.expense_type);
   const rows = []; const keys = ['allocated', 'committed', 'pipeline', 'remaining'];
   for (const type of types) {
-    const part = data.map(d => d[type.toLowerCase()]).map((t, n) => t && (t.allocated || t.committed || t.pipeline)
+    const part = data.map(d => d.by_type[type]).map((t, n) => t && (t.allocated || t.committed || t.pipeline)
       ? { department: data[n].department, expense: type, ...t, state: t.over_budget ? 'OVER BUDGET' : 'OK' } : null).filter(Boolean);
     rows.push(...part, { ...totalsRow(part, keys, `Total ${type}`), department: `Total ${type}` });
   }
   if (types.length > 1) rows.push({ ...totalsRow(rows.filter(r => !r._total), keys, 'Grand total'), department: 'Grand total' });
   res.json({
     meta: await meta(year), title: `Budget availability ${year}`, subtitle: 'CAPEX and OPEX allocations are tracked separately. Committed = planned items (incl. VAT) scheduled for this budget year; pipeline = authorised requests not yet planned (recurrent ones in each later year). LKR million.',
-    columns: [{ key: 'department', label: 'Department' }, { key: 'expense', label: 'CAPEX / OPEX' }, { key: 'allocated', label: 'Allocated', ...money }, { key: 'committed', label: 'Committed', ...money }, { key: 'pipeline', label: 'Pipeline', ...money }, { key: 'remaining', label: 'Remaining', ...money }, { key: 'state', label: '' }],
+    columns: [{ key: 'department', label: 'Department' }, { key: 'expense', label: 'Budget category' }, { key: 'allocated', label: 'Allocated', ...money }, { key: 'committed', label: 'Committed', ...money }, { key: 'pipeline', label: 'Pipeline', ...money }, { key: 'remaining', label: 'Remaining', ...money }, { key: 'state', label: '' }],
     rows
   });
 }));

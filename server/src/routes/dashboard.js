@@ -120,7 +120,7 @@ router.get('/', wrap(async (req, res) => {
     plans: planRows,
     todo: { to_authorise: toAuthorise[0].n, to_plan: toPlan[0].n, plans_awaiting_approval: planSubmitted[0].n, revisions_awaiting_approval: revSubmitted[0].n, execution_requests_pending: execPending[0].n, change_requests_pending: changePending[0].n, change_requests_to_authorise: changeToAuthorise[0].n },
     progress: prog, pending,
-    supplies: req.user.role !== 'executive' && await require('./lookups').canViewSupplies(req.user) ? await require('./supplies').dashboardCounts() : null,
+    supplies: req.user.role !== 'executive' && await require('./lookups').canViewSupplies(req.user) ? await require('./supplies').dashboardCounts(req.user) : null,
     reminders: await loadReminders(req.user, t),
     delayed: delayed.slice(0, 10), delayed_count: delayed.length,
     deadlines: deadlinesFor(t)

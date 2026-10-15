@@ -214,7 +214,7 @@ export default function DashboardPage() {
           {availability.length === 0 ? <div className="empty">No budget or plan data for {fy}.</div> : (
             <div className="tbl-wrap"><table>
               <thead><tr><th>Department</th><th>Type</th><th style={{ textAlign: 'right' }}>Allocated</th><th style={{ textAlign: 'right' }}>Committed</th><th>Use</th></tr></thead>
-              <tbody>{availability.flatMap(a => [['CAPEX', a.capex], ['OPEX', a.opex]].filter(([, t]) => t.allocated || t.committed).map(([type, t]) => {
+              <tbody>{availability.flatMap(a => Object.entries(a.by_type).filter(([, t]) => t.allocated || t.committed).map(([type, t]) => {
                 const p = t.allocated ? Math.min(100, (t.committed / t.allocated) * 100) : 0;
                 return (
                   <tr key={a.department_id + type}><td>{a.department}</td><td>{type}</td><td style={{ textAlign: 'right' }}>{fmt(t.allocated)}</td><td style={{ textAlign: 'right' }}>{fmt(t.committed)}</td>

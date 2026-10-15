@@ -6,6 +6,7 @@ const recurrence = require('../recurrence');
 const { EXPENSE_TYPES } = recurrence;
 const phasing = require('../phasing');
 const rules = require('../rules');
+const { CATEGORY_LABEL } = require('../planLib');
 
 const router = express.Router();
 const MANAGE = ['procurement', 'management', 'admin'];
@@ -14,21 +15,21 @@ const MANAGE = ['procurement', 'management', 'admin'];
 // CAPEX and OPEX are separate allocations: each is compared only with plan items of the same type.
 async function availability(year) {
   const [budgetRows] = await pool.query(
-    `SELECT b.department_id, d.name AS department, b.expense_type, b.category_id, c.name AS category, SUM(b.amount_mn) AS amount
+    `SELECT b.department_id, d.name AS department, b.expense_type, b.category_id, ${CATEGORY_LABEL} AS category, SUM(b.amount_mn) AS amount
      FROM budgets b JOIN departments d ON d.id = b.department_id LEFT JOIN categories c ON c.id = b.category_id
-     WHERE b.year = ? GROUP BY b.department_id, b.expense_type, b.category_id, d.name, c.name`, [year]);
+     WHERE b.year = ? GROUP BY b.department_id, b.expense_type, b.category_id, d.name, c.manual_type, c.name`, [year]);
   // A procurement counts in this budget year by its phasing share: one starting up to (MAX_YEARS - 1)
   // years earlier may still need part of its value now.
   const back = phasing.MAX_YEARS - 1;
   const [itemRows] = await pool.query(
-    `SELECT r.department_id, d.name AS department, r.expense_type, r.category_id, c.name AS category, r.budget_phasing,
+    `SELECT r.department_id, d.name AS department, r.expense_type, r.category_id, ${CATEGORY_LABEL} AS category, r.budget_phasing,
             i.plan_fy + i.year_offset AS start_year, i.tce_excl_vat_mn, i.vat_pct
      FROM plan_items i JOIN requests r ON r.id = i.request_id JOIN departments d ON d.id = r.department_id JOIN categories c ON c.id = r.category_id
      WHERE i.status <> 'cancelled' AND i.plan_fy + i.year_offset BETWEEN ? AND ?`, [year - back, year]);
   const committedRows = itemRows.map(x => ({ ...x, amount: rules.tceInclVat(x.tce_excl_vat_mn, x.vat_pct) * phasing.share(x.budget_phasing, year - x.start_year) }));
   // Authorised but not yet planned. A recurrent request also counts in each later cycle year, escalated yearly.
   const [reqRows] = await pool.query(
-    `SELECT r.department_id, d.name AS department, r.expense_type, r.category_id, c.name AS category, r.budget_phasing,
+    `SELECT r.department_id, d.name AS department, r.expense_type, r.category_id, ${CATEGORY_LABEL} AS category, r.budget_phasing,
             r.plan_fy + r.year_offset AS start_year, r.year_offset, r.tce_excl_vat_mn, r.vat_pct, r.recurrence, r.annual_increase_pct
      FROM requests r JOIN departments d ON d.id = r.department_id JOIN categories c ON c.id = r.category_id
      LEFT JOIN plan_items i ON i.request_id = r.id AND i.recur_index = 0
@@ -45,7 +46,7 @@ async function availability(year) {
   const blank = () => ({ allocated: 0, committed: 0, pipeline: 0 });
   const depts = new Map();
   const dept = (id, name) => {
-    if (!depts.has(id)) depts.set(id, { department_id: id, department: name, ...blank(), types: { CAPEX: blank(), OPEX: blank() }, categories: new Map() });
+    if (!depts.has(id)) depts.set(id, { department_id: id, department: name, ...blank(), types: Object.fromEntries(EXPENSE_TYPES.map(t => [t, blank()])), categories: new Map() });
     return depts.get(id);
   };
   const cat = (d, type, id, name) => {
@@ -66,10 +67,11 @@ async function availability(year) {
   const r2 = n => Math.round(n * 100) / 100;
   const sum = t => ({ allocated: r2(t.allocated), committed: r2(t.committed), pipeline: r2(t.pipeline), remaining: r2(t.allocated - t.committed), over_budget: t.committed > t.allocated + 1e-9 });
   return [...depts.values()].sort((a, b) => a.department.localeCompare(b.department)).map(d => {
-    const capex = sum(d.types.CAPEX), opex = sum(d.types.OPEX);
+    // by_type: one entry per Budget Category (CAPEX, OPEX, Inventory), each checked against its own allocation.
+    const byType = Object.fromEntries(EXPENSE_TYPES.map(t => [t, sum(d.types[t])]));
     return {
       department_id: d.department_id, department: d.department,
-      ...sum(d), over_budget: capex.over_budget || opex.over_budget, capex, opex,
+      ...sum(d), over_budget: Object.values(byType).some(t => t.over_budget), by_type: byType,
       categories: [...d.categories.values()].filter(c => c.category_id != null)
         .sort((a, b) => a.expense_type.localeCompare(b.expense_type) || a.category.localeCompare(b.category)).map(c => ({
           ...c, allocated: r2(c.allocated), committed: r2(c.committed), pipeline: r2(c.pipeline),
@@ -81,7 +83,7 @@ async function availability(year) {
 
 router.get('/', wrap(async (req, res) => {
   const [rows] = await pool.query(
-    `SELECT b.*, d.name AS department, c.name AS category FROM budgets b JOIN departments d ON d.id = b.department_id LEFT JOIN categories c ON c.id = b.category_id
+    `SELECT b.*, d.name AS department, ${CATEGORY_LABEL} AS category FROM budgets b JOIN departments d ON d.id = b.department_id LEFT JOIN categories c ON c.id = b.category_id
      ${req.query.year ? 'WHERE b.year = ?' : ''} ORDER BY b.year DESC, d.name, b.expense_type, c.name`, req.query.year ? [Number(req.query.year)] : []);
   res.json(isWide(req.user) ? rows : rows.filter(b => b.department_id === req.user.department_id));
 }));

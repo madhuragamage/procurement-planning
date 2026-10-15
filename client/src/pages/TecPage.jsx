@@ -19,7 +19,7 @@ function DueState({ c }) {
 
 // Appoint a committee for a procurement whose execution has been accepted.
 function AppointForm({ items, members, onDone }) {
-  const [f, setF] = useState({ plan_item_id: '', appointed_on: today(), due_date: '', notes: '' });
+  const [f, setF] = useState({ plan_item_id: '', appointed_on: today(), due_date: '', letter_ref: '', notes: '' });
   const [roster, setRoster] = useState([{ member_id: '', role: 'chair' }, { member_id: '', role: 'member' }]);
   const { busy, error, run } = useAction();
   const active = members.filter(m => m.active);
@@ -29,7 +29,7 @@ function AppointForm({ items, members, onDone }) {
     e.preventDefault();
     const out = await run(() => api.post('/tec/committees', { ...f, members: roster.filter(r => r.member_id) }));
     if (out) {
-      setF({ plan_item_id: '', appointed_on: today(), due_date: '', notes: '' });
+      setF({ plan_item_id: '', appointed_on: today(), due_date: '', letter_ref: '', notes: '' });
       setRoster([{ member_id: '', role: 'chair' }, { member_id: '', role: 'member' }]);
       const sent = out.emails.filter(s => s === 'sent').length;
       onDone(`TEC appointed. Appointment e-mails: ${sent} of ${out.emails.length} sent${sent < out.emails.length ? ' (see the e-mail log on the committee)' : ''}.`);
@@ -65,7 +65,11 @@ function AppointForm({ items, members, onDone }) {
         </div>
       ))}
       <button type="button" className="mini plain" onClick={() => setRoster(x => [...x, { member_id: '', role: 'member' }])}>+ add member</button>
-      <label className="field" style={{ marginTop: 12 }}><span>Notes (e.g. appointment letter reference)</span><input type="text" value={f.notes} onChange={e => setF({ ...f, notes: e.target.value })} /></label>
+      <div className="grid g3" style={{ marginTop: 12 }}>
+        <label className="field"><span>Appointment letter reference no</span><input type="text" value={f.letter_ref} maxLength={80} onChange={e => setF({ ...f, letter_ref: e.target.value })} placeholder="e.g. PROC/TEC/2026/014" /></label>
+        <label className="field" style={{ gridColumn: 'span 2' }}><span>Notes</span><input type="text" value={f.notes} onChange={e => setF({ ...f, notes: e.target.value })} /></label>
+      </div>
+      <p className="hint">The reference number is quoted in the appointment e-mail and in every reminder for this committee.</p>
       <button className="primary" disabled={busy}>Appoint and send e-mails</button>
     </form>
   );
@@ -75,6 +79,7 @@ function Committee({ c, members, isProc, onChange }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState(null);
   const [due, setDue] = useState(c.due_date);
+  const [letterRef, setLetterRef] = useState(c.letter_ref || '');
   const [completedOn, setCompletedOn] = useState(today());
   const [add, setAdd] = useState({ member_id: '', role: 'member' });
   const [subDates, setSubDates] = useState({});
@@ -89,7 +94,7 @@ function Committee({ c, members, isProc, onChange }) {
     <div className="card" style={{ marginBottom: 12, borderLeft: `4px solid ${c.overdue ? 'var(--bad)' : active && c.days_left <= 7 ? 'var(--warn)' : 'var(--line)'}` }}>
       <div className="between">
         <div><b>TEC #{c.id}</b> · {c.bid_no ? <><b>{c.bid_no}</b> ({c.ref_no})</> : c.ref_no} — {c.title} <DueState c={c} /></div>
-        <div className="hint" style={{ margin: 0 }}>{c.department} · {c.method || 'method —'} · LKR {fmt(inclVat(c.tce_excl_vat_mn, c.vat_pct))} Mn · appointed {c.appointed_on} · due <b>{c.due_date}</b></div>
+        <div className="hint" style={{ margin: 0 }}>{c.department} · {c.method || 'method —'} · LKR {fmt(inclVat(c.tce_excl_vat_mn, c.vat_pct))} Mn · {c.letter_ref ? `ref ${c.letter_ref} · ` : ''}appointed {c.appointed_on} · due <b>{c.due_date}</b></div>
       </div>
       {c.notes && <p className="hint" style={{ margin: '6px 0 0' }}>{c.notes}</p>}
       <Msg error={error} ok={ok} />
@@ -125,10 +130,11 @@ function Committee({ c, members, isProc, onChange }) {
             <button className="ghost" disabled={busy || !pending} onClick={() => act(() => api.post(`/tec/committees/${c.id}/remind`), 'Reminder e-mailed to members who have not submitted.')}>Send reminder now</button>
           </div>
           <div className="hintbox">
-            <b>Extend the time given</b>
-            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-              <input type="date" value={due} min={c.appointed_on} onChange={e => setDue(e.target.value)} />
-              <button className="ghost" disabled={busy || due === c.due_date} onClick={() => act(() => api.put('/tec/committees/' + c.id, { due_date: due }), `Due date changed to ${due}; reminders re-armed.`)}>Save</button>
+            <b>Due date and letter reference</b>
+            <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+              <input type="date" value={due} min={c.appointed_on} onChange={e => setDue(e.target.value)} title="Extend the time given" style={{ flex: '1 1 140px' }} />
+              <input type="text" value={letterRef} onChange={e => setLetterRef(e.target.value)} placeholder="letter ref no" maxLength={80} style={{ flex: '1 1 140px' }} />
+              <button className="ghost" disabled={busy || (due === c.due_date && letterRef === (c.letter_ref || ''))} onClick={() => act(() => api.put('/tec/committees/' + c.id, { due_date: due, letter_ref: letterRef }), due !== c.due_date ? `Due date changed to ${due}; reminders re-armed.` : 'Reference saved.')}>Save</button>
             </div>
           </div>
           <div className="hintbox">
@@ -165,6 +171,57 @@ function Committee({ c, members, isProc, onChange }) {
           {isProc && active && <div style={{ marginTop: 10 }}><CommentAction busy={busy} actions={[{ label: 'Cancel this committee', onClick: comment => act(() => api.post(`/tec/committees/${c.id}/cancel`, { comment }), 'Committee cancelled.') }]} /></div>}
         </div>
       )}
+    </div>
+  );
+}
+
+const SIG_FIELDS = [
+  ['signatory_name', 'Name of signatory', 'e.g. K. L. Fernando'], ['signatory_designation', 'Designation', 'e.g. Procurement Manager'],
+  ['unit', 'Unit / division', 'e.g. Procurement Unit, P&P Division'], ['organisation', 'Organisation', ''],
+  ['phone', 'Phone', 'e.g. +94 11 2xxxxxx Ext. 123'], ['email', 'E-mail', 'e.g. procurement@leco.lk']
+];
+
+// Signature block and reminder lead time for TEC e-mails, with a live preview of all three e-mails.
+function EmailSettings({ status, canEdit, onSaved }) {
+  const [sig, setSig] = useState(status.signature);
+  const [days, setDays] = useState(status.reminder_days);
+  const [sampleRef, setSampleRef] = useState('');
+  const [which, setWhich] = useState('appointment');
+  const [preview, setPreview] = useState(null);
+  const { busy, error, ok, run } = useAction();
+
+  useEffect(() => {
+    const t = setTimeout(() => api.post('/tec/preview', { signature: sig, letter_ref: sampleRef }).then(setPreview).catch(() => {}), 250);
+    return () => clearTimeout(t);
+  }, [sig, sampleRef]);
+
+  return (
+    <div className="grid g2">
+      <div className="card">
+        <h2>Signature and reminders</h2>
+        <p className="hint">Used at the end of every appointment and reminder e-mail. Blank lines are left out. Each e-mail also starts with its date and the committee's appointment letter reference number.</p>
+        <Msg error={error} ok={ok} />
+        {SIG_FIELDS.map(([k, l, ph]) => (
+          <label className="field" key={k}><span>{l}</span>
+            <input type={k === 'email' ? 'email' : 'text'} value={sig[k] || ''} disabled={!canEdit} maxLength={160}
+              placeholder={k === 'organisation' ? (status.organisation_default || '') + ' (default)' : ph} onChange={e => setSig({ ...sig, [k]: e.target.value })} /></label>
+        ))}
+        <label className="field"><span>Send the reminder this many days before the due date</span>
+          <input type="number" min="1" max="60" value={days} disabled={!canEdit} onChange={e => setDays(e.target.value)} /></label>
+        {canEdit && <button className="primary" disabled={busy} onClick={async () => { if (await run(() => api.put('/tec/settings', { reminder_days: Number(days), signature: sig }), 'E-mail settings saved — new e-mails use them.')) onSaved(); }}>Save</button>}
+      </div>
+      <div className="card">
+        <div className="between"><h2 style={{ margin: 0 }}>Preview</h2>
+          <div className="tabbar" style={{ margin: 0 }}>{[['appointment', 'Appointment'], ['reminder', 'Reminder'], ['overdue', 'Overdue']].map(([k, l]) => <button key={k} className={which === k ? 'on' : ''} onClick={() => setWhich(k)}>{l}</button>)}</div></div>
+        <label className="field" style={{ marginTop: 10 }}><span>Sample letter reference (preview only)</span><input type="text" value={sampleRef} onChange={e => setSampleRef(e.target.value)} placeholder="PROC/TEC/2026/001" /></label>
+        {preview && (
+          <div className="hintbox" style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
+            <div style={{ marginBottom: 8 }}><b>Subject:</b> {preview[which].subject}</div>
+            <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{preview[which].text}</div>
+          </div>
+        )}
+        <p className="hint" style={{ marginTop: 8 }}>Sample procurement and member; real e-mails use the committee's details.</p>
+      </div>
     </div>
   );
 }
@@ -298,9 +355,11 @@ export default function TecPage() {
       <div className="tabbar">
         <button className={tab === 'committees' ? 'on' : ''} onClick={() => setTab('committees')}>Committees</button>
         <button className={tab === 'members' ? 'on' : ''} onClick={() => setTab('members')}>Members and performance</button>
+        <button className={tab === 'email' ? 'on' : ''} onClick={() => setTab('email')}>E-mail settings</button>
       </div>
+      {tab === 'email' && status && <EmailSettings key={JSON.stringify(status.signature)} status={status} canEdit={isProc} onSaved={load} />}
 
-      {tab === 'committees' ? (
+      {tab === 'email' ? null : tab === 'committees' ? (
         <>
           {isProc && <AppointForm items={items} members={members} onDone={msg => { setOk(msg); load(); }} />}
           <div className="between" style={{ marginBottom: 10 }}>

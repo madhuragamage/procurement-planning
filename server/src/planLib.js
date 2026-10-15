@@ -4,6 +4,10 @@ const { HttpError, num, optString, optDate, oneOf, reqString, isWide, inScope } 
 
 const recurrence = require('./recurrence');
 
+// "Main category / Sub category" (categories aliased c), e.g. "Goods / IT-related" - sub names repeat across mains.
+const MAIN_CATEGORY_LABEL = { goods: 'Goods', works: 'Works', services: 'Non-Consultancy Services', consultancy: 'Consultancy Services' };
+const CATEGORY_LABEL = `CONCAT(CASE c.manual_type ${Object.entries(MAIN_CATEGORY_LABEL).map(([k, v]) => `WHEN '${k}' THEN '${v}'`).join(' ')} END, ' / ', c.name)`;
+
 // Projected repeats of a recurrent request show as REF/R1, REF/R2 (plan items aliased i, requests r).
 const ITEM_REF = "CONCAT(r.ref_no, IF(i.recur_index > 0, CONCAT('/R', i.recur_index), ''))";
 
@@ -11,14 +15,15 @@ const ITEM_REF = "CONCAT(r.ref_no, IF(i.recur_index > 0, CONCAT('/R', i.recur_in
 const ITEM_SELECT = `
   SELECT i.*, ${ITEM_REF} AS ref_no, r.department_id, d.name AS department, d.code AS department_code, dv.name AS division,
          r.sub_unit_id, su.name AS sub_unit, r.reason, r.reason_note, r.expense_type, r.recurrence, r.annual_increase_pct, r.budget_phasing,
-         r.category_id, c.name AS category, c.manual_type, r.priority,
-         DATE_ADD(r.required_date, INTERVAL i.recur_index YEAR) AS required_date
+         r.category_id, ${CATEGORY_LABEL} AS category, c.manual_type, r.priority,
+         DATE_ADD(r.required_date, INTERVAL i.recur_index YEAR) AS required_date, bc.code AS budget_code, bc.description AS budget_code_desc
   FROM plan_items i
   JOIN requests r ON r.id = i.request_id
   JOIN departments d ON d.id = r.department_id
   LEFT JOIN divisions dv ON dv.id = d.division_id
   LEFT JOIN sub_units su ON su.id = r.sub_unit_id
-  JOIN categories c ON c.id = r.category_id`;
+  JOIN categories c ON c.id = r.category_id
+  LEFT JOIN budget_codes bc ON bc.id = r.budget_code_id`;
 
 // Department users (requester / dept_head) see only their own unit's items, and only once management
 // has approved the plan. Procurement, management, executive and admin see everything.
@@ -175,6 +180,6 @@ function delaySummary(item, today) {
 
 module.exports = {
   visibleItems, createItem, delaySummary,
-  ITEM_SELECT, ITEM_REF, EDITABLE_STATES, getPlan, ensurePlan, assertPlanEditable, loadItems, loadItem,
+  ITEM_SELECT, ITEM_REF, CATEGORY_LABEL, MAIN_CATEGORY_LABEL, EDITABLE_STATES, getPlan, ensurePlan, assertPlanEditable, loadItems, loadItem,
   parseItemFields, buildInsert, mergeSchedule, snapshotPlan
 };

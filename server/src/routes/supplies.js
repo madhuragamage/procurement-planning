@@ -4,6 +4,7 @@ const rules = require('../rules');
 const sup = require('../supplies');
 const mailer = require('../mailer');
 const lib = require('../planLib');
+const { CATEGORY_LABEL } = lib;
 const { requireRole } = require('../middleware/auth');
 const { wrap, HttpError, reqString, optString, optDate, num, oneOf, audit, tx } = require('../util');
 
@@ -29,7 +30,7 @@ async function orgName() {
 
 const SELECT = `
   SELECT sc.*, i.bid_no, i.bid_type, ${lib.ITEM_REF} AS ref_no, i.title, i.method, i.plan_fy, i.tce_excl_vat_mn, i.vat_pct, i.award_value_mn,
-         d.name AS department, su.name AS sub_unit, c.name AS category, r.expense_type,
+         d.name AS department, su.name AS sub_unit, ${CATEGORY_LABEL} AS category, r.expense_type,
          fu.name AS forwarded_by_name, au.name AS accepted_by_name, ou.name AS officer_name
   FROM supply_contracts sc
   JOIN plan_items i ON i.id = sc.plan_item_id
@@ -40,6 +41,26 @@ const SELECT = `
   JOIN users fu ON fu.id = sc.forwarded_by
   LEFT JOIN users au ON au.id = sc.accepted_by
   LEFT JOIN users ou ON ou.id = sc.officer_id`;
+
+// A Supplies Unit officer works only on the files forwarded (assigned) to them, plus files not yet assigned
+// to anyone (the unit's in-tray), open or completed. Others with access see every file.
+const officerScope = user => (user.role === 'supplies' ? { sql: ' AND (sc.officer_id = ? OR sc.officer_id IS NULL)', params: [user.id] } : { sql: '', params: [] });
+async function assertFile(user, contractId) {
+  if (user.role !== 'supplies') return;
+  const [[c]] = await pool.query('SELECT officer_id FROM supply_contracts WHERE id = ?', [contractId]);
+  if (c && c.officer_id && c.officer_id !== user.id) throw new HttpError(404, 'Supplies file not found.');
+}
+// Route ids that belong to a file: check the officer may touch that file before the handler runs.
+const OWNED = { id: null, bid: 'supply_bonds', did: 'supply_deliveries', lid: 'supply_letters', eid: 'supply_extensions' };
+for (const [param, table] of Object.entries(OWNED)) {
+  router.param(param, (req, res, next, value) => {
+    (async () => {
+      let contractId = Number(value);
+      if (table) { const [[row]] = await pool.query(`SELECT contract_id FROM ${table} WHERE id = ?`, [contractId]); contractId = row ? row.contract_id : 0; }
+      await assertFile(req.user, contractId);
+    })().then(() => next(), next);
+  });
+}
 
 async function loadContract(id, conn) {
   const [[c]] = await (conn || pool).query(`${SELECT} WHERE sc.id = ?`, [id]);
@@ -64,12 +85,19 @@ router.post('/forward', requireRole(...PROC), wrap(async (req, res) => {
     if (!['awarded', 'completed'].includes(it.status) && !award) throw new HttpError(409, 'Forward the file once the award has been made (record the contract award date or set the status to awarded).');
     const [[dup]] = await conn.query('SELECT id FROM supply_contracts WHERE plan_item_id = ?', [itemId]);
     if (dup) throw new HttpError(409, 'This file has already been forwarded to the Supplies Department.');
+    // Forwarded to a named Supplies Unit officer, or (if none chosen) to the unit's in-tray for any officer to accept.
+    let officer = null;
+    if (req.body.officer_id) {
+      const [[u]] = await conn.query("SELECT id, name FROM users WHERE id = ? AND role = 'supplies' AND active = 1", [Number(req.body.officer_id)]);
+      if (!u) throw new HttpError(400, 'Choose an active Supplies Unit officer.');
+      officer = u;
+    }
     const [r] = await conn.query(
-      `INSERT INTO supply_contracts (plan_item_id, forwarded_on, forwarded_by, forward_note, supplier_name, award_date, local_cost_lkr, steps)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [itemId, today(), req.user.id, optString(req.body.note, 500), it.contractor || null, award || it.contract_date || null,
+      `INSERT INTO supply_contracts (plan_item_id, forwarded_on, forwarded_by, forward_note, officer_id, supplier_name, award_date, local_cost_lkr, steps)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [itemId, today(), req.user.id, optString(req.body.note, 500), officer && officer.id, it.contractor || null, award || it.contract_date || null,
         it.award_value_mn == null ? null : Math.round(it.award_value_mn * 1e6 * 100) / 100, JSON.stringify({ file_received: { date: today() } })]);
-    await audit(conn, 'plan_item', itemId, 'forwarded-to-supplies', req.user.id, optString(req.body.note, 500));
+    await audit(conn, 'plan_item', itemId, 'forwarded-to-supplies', req.user.id, [officer && `to ${officer.name}`, optString(req.body.note, 500)].filter(Boolean).join(' — ') || null);
     return r.insertId;
   });
   res.status(201).json({ id });
@@ -80,7 +108,8 @@ router.get('/contracts', viewGuard, wrap(async (req, res) => {
   const where = []; const params = [];
   if (req.query.status) { where.push('sc.status = ?'); params.push(String(req.query.status)); }
   if (req.query.plan_item_id) { where.push('sc.plan_item_id = ?'); params.push(Number(req.query.plan_item_id)); }
-  const [rows] = await pool.query(`${SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY FIELD(sc.status, 'forwarded', 'accepted', 'closed'), sc.forwarded_on DESC`, params);
+  const scope = officerScope(req.user);
+  const [rows] = await pool.query(`${SELECT} WHERE 1=1${where.map(w => ' AND ' + w).join('')}${scope.sql} ORDER BY FIELD(sc.status, 'forwarded', 'accepted', 'closed'), sc.forwarded_on DESC`, [...params, ...scope.params]);
   const s = await settings(); const t = today();
   res.json(rows.map(c => withSteps(c, s, t)));
 }));
@@ -255,7 +284,8 @@ router.get('/bonds', viewGuard, wrap(async (req, res) => {
   const [rows] = await pool.query(
     `SELECT b.*, sc.supplier_name, sc.status AS contract_status, i.bid_no, ${lib.ITEM_REF} AS ref_no, i.title
      FROM supply_bonds b JOIN supply_contracts sc ON sc.id = b.contract_id JOIN plan_items i ON i.id = sc.plan_item_id JOIN requests r ON r.id = i.request_id
-     ORDER BY FIELD(b.status, 'held', 'expected', 'released', 'returned', 'forfeited'), b.expiry_date IS NULL, b.expiry_date`);
+     WHERE 1=1${officerScope(req.user).sql}
+     ORDER BY FIELD(b.status, 'held', 'expected', 'released', 'returned', 'forfeited'), b.expiry_date IS NULL, b.expiry_date`, officerScope(req.user).params);
   const s = await settings(); const t = today();
   res.json(rows.map(b => bondState(b, t, s)));
 }));
@@ -405,8 +435,9 @@ async function reportMeta() { return { org: await orgName(), plan_status: '—',
 
 router.get('/reports/:type', viewGuard, wrap(async (req, res) => {
   const s = await settings(); const t = today();
+  const scope = officerScope(req.user);
   if (req.params.type === 'status') {
-    const [rows] = await pool.query(`${SELECT} WHERE sc.status <> 'closed' OR sc.closed_on >= ? ORDER BY sc.forwarded_on`, [rules.addDays(t, -90)]);
+    const [rows] = await pool.query(`${SELECT} WHERE (sc.status <> 'closed' OR sc.closed_on >= ?)${scope.sql} ORDER BY sc.forwarded_on`, [rules.addDays(t, -90), ...scope.params]);
     const out = rows.map((c, n) => {
       const st = sup.steps(c, s, t);
       const g = k => (c.steps && c.steps[k] && c.steps[k].date) || '';
@@ -430,7 +461,7 @@ router.get('/reports/:type', viewGuard, wrap(async (req, res) => {
   if (req.params.type === 'bonds') {
     const [rows] = await pool.query(
       `SELECT b.*, sc.supplier_name, i.bid_no, ${lib.ITEM_REF} AS ref_no, i.title FROM supply_bonds b JOIN supply_contracts sc ON sc.id = b.contract_id
-       JOIN plan_items i ON i.id = sc.plan_item_id JOIN requests r ON r.id = i.request_id ORDER BY b.status <> 'held', b.expiry_date`);
+       JOIN plan_items i ON i.id = sc.plan_item_id JOIN requests r ON r.id = i.request_id WHERE 1=1${scope.sql} ORDER BY b.status <> 'held', b.expiry_date`, scope.params);
     const KIND = { bid: 'Bid bond', performance: 'Performance Bond', advance: 'Advance Payment Bond' };
     const out = rows.map((b, n) => { const x = bondState(b, t, s); return {
       no: n + 1, kind: KIND[b.kind], bid_no: b.bid_no, ref_no: b.ref_no, supplier: b.supplier_name || '', bond_no: b.bond_no || '', bank: b.bank || '', amount: r2(b.amount), currency: b.currency,
@@ -449,7 +480,7 @@ router.get('/reports/:type', viewGuard, wrap(async (req, res) => {
   if (req.params.type === 'delay-waiver') {
     const [rows] = await pool.query(
       `SELECT e.*, sc.supplier_name, i.bid_no, ${lib.ITEM_REF} AS ref_no, i.title FROM supply_extensions e JOIN supply_contracts sc ON sc.id = e.contract_id
-       JOIN plan_items i ON i.id = sc.plan_item_id JOIN requests r ON r.id = i.request_id ORDER BY e.decision = 'pending' DESC, e.requested_on`);
+       JOIN plan_items i ON i.id = sc.plan_item_id JOIN requests r ON r.id = i.request_id WHERE 1=1${scope.sql} ORDER BY e.decision = 'pending' DESC, e.requested_on`, scope.params);
     const out = rows.map((e, n) => ({
       no: n + 1, bid_no: e.bid_no, ref_no: e.ref_no, title: e.title, supplier: e.supplier_name || '', requested_on: e.requested_on, current: e.current_delivery || '', requested: e.requested_delivery,
       days: e.current_delivery ? rules.diffDays(e.current_delivery, e.requested_delivery) : '', type: e.delay_waiver ? 'Delay waiver' : 'Delivery extension', reason: e.reason || '',
@@ -467,12 +498,58 @@ router.get('/reports/:type', viewGuard, wrap(async (req, res) => {
   throw new HttpError(404, 'Unknown report.');
 }));
 
-// Counts for the dashboard.
-async function dashboardCounts() {
+// Supplies progress dashboard: every file (an officer: their own and the in-tray), measured against its
+// delivery target, with delivery performance, upcoming deliveries and (for supervisors) a per-officer view.
+router.get('/progress', viewGuard, wrap(async (req, res) => {
   const s = await settings(); const t = today();
-  const [rows] = await pool.query(`${SELECT} WHERE sc.status <> 'closed'`);
+  const scope = officerScope(req.user);
+  const [rows] = await pool.query(`${SELECT} WHERE 1=1${scope.sql} ORDER BY sc.delivery_date IS NULL, sc.delivery_date, sc.id`, scope.params);
+  const [extensions] = await pool.query("SELECT contract_id, COUNT(*) AS n FROM supply_extensions WHERE decision = 'granted' GROUP BY contract_id");
+  const extended = new Map(extensions.map(e => [e.contract_id, e.n]));
+  const files = rows.map(c => ({
+    id: c.id, bid_no: c.bid_no, ref_no: c.ref_no, title: c.title, department: c.department, supplier: c.supplier_name, officer_id: c.officer_id, officer: c.officer_name,
+    status: c.status, forwarded_on: c.forwarded_on, accepted_on: c.accepted_on, closed_on: c.closed_on, extensions: extended.get(c.id) || 0,
+    ...sup.deliveryProgress(c, s, t)
+  }));
+  const open = files.filter(f => f.status !== 'closed');
+  const delivered = files.filter(f => f.delivered && f.target);
+  const tracked = open.filter(f => f.status === 'accepted' && f.target && !f.delivered);
+  const avg = (list, k) => (list.length ? Math.round(list.reduce((x, f) => x + (f[k] || 0), 0) / list.length) : null);
+  const soon = rules.addDays(t, 30);
+  // Deliveries expected in each of the next three months.
+  const months = [0, 1, 2].map(k => { const d = new Date(t + 'T00:00:00Z'); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + k); return d.toISOString().slice(0, 7); });
+  const upcoming = months.map(m => ({ month: m, files: open.filter(f => !f.delivered && f.target && f.target >= t && f.target.slice(0, 7) === m).map(f => ({ id: f.id, bid_no: f.bid_no, title: f.title, target: f.target, supplier: f.supplier })) }));
+  const counts = await dashboardCounts(req.user);
+  const byOfficer = req.user.role === 'supplies' ? [] : [...new Map(files.map(f => [f.officer_id || 0, f.officer || 'Not assigned'])).entries()].map(([id, name]) => {
+    const mine = files.filter(f => (f.officer_id || 0) === id);
+    const mineOpen = mine.filter(f => f.status !== 'closed');
+    const done = mine.filter(f => f.delivered && f.target);
+    return { name, open: mineOpen.length, on_track: mineOpen.filter(f => f.state === 'on_track').length, behind: mineOpen.filter(f => f.state === 'behind').length,
+      overdue: mineOpen.filter(f => f.state === 'overdue').length, delivered: done.length, on_time_pct: done.length ? Math.round(done.filter(f => f.state === 'delivered').length / done.length * 100) : null };
+  }).sort((a, b) => b.open - a.open);
+  res.json({
+    today: t, scope: req.user.role === 'supplies' ? 'mine' : 'all',
+    stats: {
+      open: open.length, to_accept: open.filter(f => f.state === 'to_accept').length, in_progress: open.filter(f => f.status === 'accepted').length,
+      due_30: open.filter(f => !f.delivered && f.target && f.target >= t && f.target <= soon).length,
+      overdue: open.filter(f => f.state === 'overdue').length, behind: open.filter(f => f.state === 'behind').length,
+      delivered: delivered.length, delivered_on_time: delivered.filter(f => f.state === 'delivered').length,
+      on_time_pct: delivered.length ? Math.round(delivered.filter(f => f.state === 'delivered').length / delivered.length * 100) : null,
+      completed: files.filter(f => f.status === 'closed').length,
+      avg_actual: avg(tracked, 'actual_pct'), avg_expected: avg(tracked, 'expected_pct'),
+      bonds_expiring: counts.bonds_expiring, bonds_expired: counts.bonds_expired
+    },
+    files, upcoming, by_officer: byOfficer
+  });
+}));
+
+// Counts for the dashboard.
+async function dashboardCounts(user) {
+  const s = await settings(); const t = today();
+  const scope = officerScope(user || {});
+  const [rows] = await pool.query(`${SELECT} WHERE sc.status <> 'closed'${scope.sql}`, scope.params);
   const list = rows.map(c => ({ c, x: withSteps(c, s, t) }));
-  const [bonds] = await pool.query("SELECT * FROM supply_bonds b JOIN supply_contracts sc ON sc.id = b.contract_id WHERE b.status IN ('held','expected') AND sc.status <> 'closed'");
+  const [bonds] = await pool.query(`SELECT b.* FROM supply_bonds b JOIN supply_contracts sc ON sc.id = b.contract_id WHERE b.status IN ('held','expected') AND sc.status <> 'closed'${scope.sql}`, scope.params);
   const states = bonds.map(b => bondState(b, t, s));
   return {
     awaiting_acceptance: rows.filter(c => c.status === 'forwarded').length,

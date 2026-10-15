@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Msg, useAction, CommentAction } from '../components/ui.jsx';
@@ -386,7 +387,9 @@ export default function SuppliesPage() {
   const [settings, setSettings] = useState(null);
   const [filter, setFilter] = useState('open');
   const [officerFilter, setOfficerFilter] = useState('');
-  const [openId, setOpenId] = useState(null);
+  const [params] = useSearchParams();
+  const [openId, setOpenId] = useState(params.get('open') ? Number(params.get('open')) : null);
+  const officer = user.role === 'supplies';
   const canEdit = ['supplies', 'admin'].includes(user.role);
   const load = useCallback(async () => { setRows(await api.get('/supplies/contracts')); }, []);
   useEffect(() => { load(); api.get('/supplies/settings').then(setSettings); api.get('/supplies/officers').then(setOfficers); }, [load]);
@@ -399,7 +402,8 @@ export default function SuppliesPage() {
 
   return (
     <div>
-      <h2 style={{ margin: '0 0 4px' }}>Supplies Unit</h2>
+      <h2 style={{ margin: '0 0 4px' }}>{officer ? 'My Supplies files' : 'Supplies Unit files'}</h2>
+      {officer && <p className="hint" style={{ margin: '0 0 8px' }}>Files the procurement unit forwarded to you, and unassigned files in the Supplies Unit in-tray (accepting one makes it yours). Completed files stay here under "Closed".</p>}
       {!canEdit && <div className="note" style={{ marginTop: 0, marginBottom: 10 }}>View only. {user.role === 'dept_head' ? 'As head of the Supplies department you can follow every file, officer, bond and report; the Supplies Unit officers record the work.' : 'Files are handled by the Supplies Unit.'}</div>}
       <p className="hint">Procurement files forwarded after award. Accept each file on the day it arrives, enter the award details, and record each step of the work procedure; the steps that apply depend on the contract (imports, proof approval, advance payment, FAT, duty waiver).</p>
       {settings && !settings.email_configured && <div className="error-banner">E-mail is not set up on the server yet, so reminders to suppliers and bond expiry notices are logged but not delivered.</div>}
@@ -412,14 +416,16 @@ export default function SuppliesPage() {
       <div className="tabbar">
         <button className={tab === 'files' ? 'on' : ''} onClick={() => setTab('files')}>Files</button>
         <button className={tab === 'bonds' ? 'on' : ''} onClick={() => setTab('bonds')}>Bond register</button>
-        <button className={tab === 'officers' ? 'on' : ''} onClick={() => setTab('officers')}>Officers</button>
+        {!officer && <button className={tab === 'officers' ? 'on' : ''} onClick={() => setTab('officers')}>Officers</button>}
       </div>
       {tab === 'bonds' ? <BondRegister /> : tab === 'officers' ? <Officers rows={rows} officers={officers} /> : (
         <>
           <div className="card">
             <div className="between" style={{ marginBottom: 8 }}><h2 style={{ margin: 0 }}>Files</h2>
               <div style={{ display: 'flex', gap: 8 }}>
-                <select value={officerFilter} onChange={e => setOfficerFilter(e.target.value)} style={{ width: 'auto' }}><option value="">All officers</option>{officers.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}<option value="none">Not assigned</option></select>
+                {officer
+                  ? <select value={officerFilter} onChange={e => setOfficerFilter(e.target.value)} style={{ width: 'auto' }}><option value="">Mine and in-tray</option><option value={user.id}>Mine</option><option value="none">In-tray (unassigned)</option></select>
+                  : <select value={officerFilter} onChange={e => setOfficerFilter(e.target.value)} style={{ width: 'auto' }}><option value="">All officers</option>{officers.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}<option value="none">Not assigned</option></select>}
                 <select value={filter} onChange={e => setFilter(e.target.value)} style={{ width: 'auto' }}><option value="open">Open</option><option value="forwarded">Awaiting acceptance</option><option value="accepted">In progress</option><option value="closed">Closed</option><option value="all">All</option></select>
               </div></div>
             {shown.length === 0 ? <div className="empty">No files.</div> : (

@@ -10,7 +10,10 @@ const MIGRATIONS = [
   { id: '006_budget_phasing', run: require('./migrations/006_budget_phasing') },
   { id: '007_tec', run: require('./migrations/007_tec') },
   { id: '008_bid_numbers_supplies', run: require('./migrations/008_bid_numbers_supplies') },
-  { id: '009_execution_schedule', run: require('./migrations/009_execution_schedule') }
+  { id: '009_execution_schedule', run: require('./migrations/009_execution_schedule') },
+  { id: '010_tec_letter_ref', run: require('./migrations/010_tec_letter_ref') },
+  { id: '011_categories_budget_codes', run: require('./migrations/011_categories_budget_codes') },
+  { id: '012_category_order', run: require('./migrations/012_category_order') }
 ];
 
 async function waitForDb(retries = 30) {

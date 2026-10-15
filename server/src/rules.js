@@ -78,7 +78,8 @@ function committeeLevel(tceInclMn, funding, limits = DEFAULT_LIMITS) {
 // Lowest approving authority that may procure this value by Shopping, or null if above every cap.
 function shoppingAuthority(tceInclMn, manualType, funding, limits = DEFAULT_LIMITS) {
   const table = limits.shopping[limitClass(funding)];
-  const type = manualType === 'works' ? 'works' : manualType === 'services' ? 'services' : 'goods';
+  // Consultancy services use the services limits (the Manual's Shopping table has goods / works / services).
+  const type = manualType === 'works' ? 'works' : ['services', 'consultancy'].includes(manualType) ? 'services' : 'goods';
   for (const level of ['CAO/AO/PD', 'RPC', 'DPC/PPC', 'MPC']) {
     const cap = table[level] && table[level][type];
     if (cap != null && tceInclMn <= cap) return level;
@@ -211,7 +212,7 @@ const INTERNATIONAL_EXTRA_DAYS = 60; // shipping and clearing for ICB / internat
 const PREQUALIFICATION_DAYS = 42;    // a prequalification round before bidding
 
 function deliveryDays(manualType, tceInclMn, method) {
-  const bands = DELIVERY_DAYS[manualType] || DELIVERY_DAYS.goods;
+  const bands = DELIVERY_DAYS[manualType === 'consultancy' ? 'services' : manualType] || DELIVERY_DAYS.goods;
   const days = bands.find(b => b[0] === null || tceInclMn <= b[0])[1];
   const intl = methodFamily(method) === 'ICB' || method === 'Shopping-International';
   return days + (intl && manualType !== 'works' ? INTERNATIONAL_EXTRA_DAYS : 0);

@@ -1,7 +1,7 @@
 // Annually recurrent procurements: the same need repeats in each later year of the three-year plan cycle,
 // with the estimate increased by a fixed percentage per year (compounded).
 
-const EXPENSE_TYPES = ['CAPEX', 'OPEX'];
+const EXPENSE_TYPES = ['CAPEX', 'OPEX', 'Inventory']; // the "Budget Category"
 const RECURRENCE = ['one_time', 'recurrent'];
 
 // Same calendar date k years later; 29 Feb falls back to 28 Feb in a non-leap year.

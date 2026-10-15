@@ -28,12 +28,17 @@ Database: `server/sql/schema.sql` is the version-1 baseline; the server applies 
 
 ## Workflow
 
-1. **Request** – a department user or a **sub unit** creates a request (category, **CAPEX / OPEX**, **reason** ROL /
-   Replacement / New / Action Plan / Other, cost excl./incl. VAT, **funding** LECO (default) / GOSL / Foreign / Grant,
+1. **Request** – a department user or a **sub unit** creates a request (**main procurement category** Goods / Works /
+   Non-Consultancy Services / Consultancy Services and its **sub category**, **budget category** CAPEX / OPEX /
+   Inventory and a **budget code** of that category (codes maintained under Admin → Budget codes; required once a
+   category has codes), **reason** ROL / New / Replacement / Action Plan / Projects-ADB / Projects-LECO / Other with an
+   optional detail (required for Other), cost excl./incl. VAT, **funding** LECO (default) / GOSL / Foreign / Grant,
    required date, plan cycle and year, **one time or recurrent annually** with a yearly % increase, and optional
    **budget phasing** – the % of the value needed in the start year and up to two following years) and submits it.
    Each sub unit files independently and sees only its own requests.
-2. **Authorise** – the department head authorises, returns (with comment) or rejects it.
+2. **Authorise** – the department head authorises, returns (with comment) or rejects it. Once authorised (received by
+   the procurement unit), the procurement unit and the head of its department can **amend** the request until the plan
+   is submitted for approval; amendments are logged and carried into the plan item.
 3. **Procurement inbox** – the procurement unit assigns method, bidding procedure, prequalification,
    committee level, procurement start and expected delivery. Live checks against the Manual appear as
    warnings; a milestone schedule (Annex III) is drafted from the dates. **Date guidance** works back from the
@@ -70,7 +75,10 @@ Database: `server/sql/schema.sql` is the version-1 baseline; the server applies 
    weeks per milestone, counted from the previous milestone; the dates become each milestone's target (revised) date,
    while the approved plan dates remain the baseline.
 9. **Supplies (Supplies tab, role "Supplies Unit")** – Supplies Unit officers handle the forwarded files (each file has
-   a responsible officer). The head of the department set as the Supplies department (Admin → Limits, reminders &
+   a responsible officer). P&P forwards a file to a named officer or to the unit's in-tray. Officers see only their own
+   files and the in-tray (open and completed) – no plan, requests, budgets or other pages – and land on the
+   **Supplies progress** dashboard: each file's steps done against the time elapsed to its delivery target (on track /
+   behind / overdue / delivered on time or late), deliveries due, on-time delivery rate and, for supervisors, per officer. The head of the department set as the Supplies department (Admin → Limits, reminders &
    organisation) can view everything read-only, including each officer's workload. Once the award is made, P&P forwards the file.
    Supplies accepts it (same day), enters the award details (supplier, P/O or LoA, local and foreign cost, CIF/FOB,
    freight, insurance, bid bond, bid validity, delivery date, Performance Bond amount and validity – default delivery +
