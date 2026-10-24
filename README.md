@@ -60,12 +60,16 @@ Database: `server/sql/schema.sql` is the version-1 baseline; the server applies 
    reminded on its dashboard and sends an **execution request**. Only the procurement unit accepts it (or returns
    it with a comment) and records revised/actual milestone dates, supplier and award value. Progress cannot be
    recorded before a request is accepted.
-7. **Technical Evaluation Committees (TEC tab)** – the procurement unit keeps a directory of members (staff or
-   external, no login needed) and appoints a committee (chair, members, secretary) with a due date for an item in
-   execution. Members get an appointment e-mail; those who have not submitted get reminders 7 days before the due date
-   (Admin setting `tec.reminder_days`) and once it lapses, from an hourly job, and on demand. Extending the due date
-   re-arms the reminders. Appointment and completion fill the "Appointment of BEC" and "Bid evaluation" milestones.
-   Each member's performance (on time / late / overdue / not submitted, average days taken, on-time rate) is shown.
+7. **Bid Evaluation Committees (BEC / TEC tab)** – the procurement unit keeps a directory of members (staff or
+   external, no login needed) and appoints a BEC (chair, members, secretary) for an item in execution. The BEC has
+   **two tasks, activated separately** so waiting for bids is never counted against it: task 1 *preparation of bidding
+   documents / specifications* starts on appointment with its own due date; task 2 *bid evaluation* is started later
+   (after bid opening, once task 1 is completed) with its own due date. Members submit per task and get reminders per
+   task 7 days before its due date (setting `tec.reminder_days`) and once it lapses (hourly job, or on demand);
+   extending a due date re-arms them. Appointment, task 1 and task 2 completion fill the "Appointment of BEC",
+   "Preparation of bidding documents / specifications" and "Bid evaluation" milestones. Member performance and the
+   BEC reports are counted per task (on time / late / overdue / not submitted, days allowed and taken, on-time rate
+   per task).
    E-mail goes through the SMTP server in `.env` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`,
    `MAIL_FROM`); without it, messages are kept in the e-mail log as "not sent".
 8. **Bid numbers** – when the P&P unit accepts (or itself starts) execution it classes the procurement as a tender or
@@ -95,7 +99,12 @@ Database: `server/sql/schema.sql` is the version-1 baseline; the server applies 
    PDF" (browser print) and CSV download.
 
 Dashboard and the **Board / CEO** page show plan progress: actual = share of the 13 Annex III milestones with an
-actual date (value-weighted), against the share the schedule expects by today, by division/department.
+actual date (value-weighted), against the share the schedule expects by today, by division/department. They also show
+progress **by Time Schedule milestone** (counted by procurement, from the appointment of the Procurement Committee:
+due / achieved / on time / late / overdue, and how many procurements stand at each stage) and which procurements were
+**done within the Procurement Time Schedule** (contract signed by its schedule date; late; not done and overdue; not done
+but still within schedule). The schedule is the one set when execution was authorised, else the approved plan dates;
+"done" is `DONE_MILESTONE` in `server/src/progress.js`. Both are also reports.
 
 Roles: `admin`, `requester` (department or sub-unit user), `dept_head` (authorises for the department and its sub
 units), `procurement`, `management`, `executive` (Board/CEO, read-only).

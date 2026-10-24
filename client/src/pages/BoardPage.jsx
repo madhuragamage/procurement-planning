@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { useApp } from '../context/AppContext.jsx';
 import { Status, ProgressBar, ProgressLegend } from '../components/ui.jsx';
 import { fmt, label, pct } from '../lib/format.js';
+import { ScheduleTiles, SCHEDULE_STATES } from './DashboardPage.jsx';
 
 function Kpi({ v, l, sub, cls }) {
   return <div className={'stat ' + (cls || '')}><div className="v">{v}</div><div className="l">{l}</div>{sub && <div className="hint" style={{ margin: '6px 0 0' }}>{sub}</div>}</div>;
@@ -67,6 +68,50 @@ export default function BoardPage() {
         <div className="grid g4" style={{ marginTop: 14 }}>
           <Kpi v={fmt(h.awarded_value)} l="Contracts awarded · LKR Mn" sub={`against an estimate of ${fmt(h.awarded_estimate)}`} />
           <Kpi v={fmt(h.savings)} l="Below / (above) estimate · LKR Mn" cls={h.savings >= 0 ? 'ok' : 'bad'} />
+        </div>
+      )}
+
+      {b.schedule && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <h2>Done and not done within the Procurement Time Schedule</h2>
+          <p className="hint">Annual plan {fy}. A procurement is done when the {b.schedule.done_milestone.toLowerCase()} is recorded; compared with its date in the Procurement Time Schedule. Within schedule (of those due): <b>{b.schedule.within_schedule_pct == null ? '—' : b.schedule.within_schedule_pct + '%'}</b>.</p>
+          <ScheduleTiles s={b.schedule} />
+          {b.schedule.by_division.length > 0 && (
+            <div className="tbl-wrap" style={{ marginTop: 14, maxHeight: 'none' }}><table>
+              <thead><tr><th>Division</th><th style={{ textAlign: 'right' }}>Procurements</th>{SCHEDULE_STATES.map(([k, l]) => <th key={k} style={{ textAlign: 'right' }}>{l}</th>)}<th style={{ textAlign: 'right' }}>Within schedule</th></tr></thead>
+              <tbody>{b.schedule.by_division.map(g => (
+                <tr key={g.name}><td>{g.name}</td><td style={{ textAlign: 'right' }}>{g.total}</td>
+                  {SCHEDULE_STATES.map(([k]) => { const n = g.by_state[k].count + (k === 'in_schedule' ? g.by_state.no_schedule.count : 0); return <td key={k} style={{ textAlign: 'right' }}>{n || ''}</td>; })}
+                  <td style={{ textAlign: 'right' }}>{g.within_schedule_pct == null ? '—' : g.within_schedule_pct + '%'}</td></tr>
+              ))}</tbody>
+            </table></div>
+          )}
+          {b.schedule.exceptions.length > 0 && <>
+            <div className="section-title">Late or overdue</div>
+            <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
+              <thead><tr><th>Bid No / Ref</th><th>Procurement</th><th>Department</th><th style={{ textAlign: 'right' }}>Value (Mn)</th><th>Schedule date</th><th>Done on</th><th>Result</th></tr></thead>
+              <tbody>{b.schedule.exceptions.map(x => (
+                <tr key={x.id}><td>{x.bid_no || x.ref_no}{x.bid_no && <div className="hint" style={{ margin: 0 }}>{x.ref_no}</div>}</td><td className="wrap">{x.title}</td><td>{x.department}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(x.value)}</td><td>{x.target}</td><td>{x.done || '—'}</td>
+                  <td><span className={'pill ' + (x.state === 'overdue' ? 'bad' : 'warn')}>{x.state === 'overdue' ? `not done · ${x.days} d overdue` : `done ${x.days} d late`}</span></td></tr>
+              ))}</tbody>
+            </table></div>
+          </>}
+        </div>
+      )}
+
+      {b.milestones && b.milestones.procurements > 0 && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <h2>Progress by Time Schedule milestone</h2>
+          <p className="hint">Counted by procurement: of the procurements due to reach each milestone by today, how many have. Due milestones achieved overall: <b>{b.milestones.overall.achieved_pct == null ? '—' : b.milestones.overall.achieved_pct + '%'}</b> · on time {b.milestones.overall.on_time_pct == null ? '—' : b.milestones.overall.on_time_pct + '%'} · overdue {b.milestones.overall.overdue}.</p>
+          <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
+            <thead><tr><th>Milestone</th><th style={{ textAlign: 'right' }}>Due</th><th style={{ textAlign: 'right' }}>Achieved</th><th style={{ width: 140 }}></th><th style={{ textAlign: 'right' }}>Overdue</th></tr></thead>
+            <tbody>{b.milestones.milestones.map(r => (
+              <tr key={r.key}><td className="wrap">{r.label}</td><td style={{ textAlign: 'right' }}>{r.due}</td><td style={{ textAlign: 'right' }}>{r.achieved_due}</td>
+                <td>{r.due ? <div className={'bar' + (r.overdue ? ' over' : '')}><div style={{ width: (r.achieved_pct || 0) + '%' }}></div></div> : <span className="hint" style={{ margin: 0 }}>not due yet</span>}</td>
+                <td style={{ textAlign: 'right' }}>{r.overdue || ''}</td></tr>
+            ))}</tbody>
+          </table></div>
         </div>
       )}
 

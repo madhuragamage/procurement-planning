@@ -3,6 +3,7 @@ const pool = require('../db');
 const rules = require('../rules');
 const { wrap, HttpError, isWide } = require('../util');
 const lib = require('../planLib');
+const progress = require('../progress');
 const { availability } = require('./budgets');
 const phasing = require('../phasing');
 const { EXPENSE_TYPES } = require('../recurrence');
@@ -147,6 +148,63 @@ const BUILDERS = {
       summary: [
         { label: 'Procurements', value: sel.length }, { label: 'On or before the requested date', value: counts.on_time },
         { label: 'Later than requested', value: counts.late }, { label: 'Not scheduled yet / no date requested', value: counts.unscheduled + counts.no_date }
+      ]
+    };
+  },
+
+  // Progress by Procurement Time Schedule milestone, from the appointment of the Procurement Committee onwards.
+  async 'milestone-progress'(items, q, fy) {
+    const today = new Date().toISOString().slice(0, 10);
+    const sel = items.filter(i => i.year_offset === 0 && i.status !== 'cancelled');
+    const p = progress.milestoneProgress(sel, today);
+    const atStage = new Map(p.stages.map(s => [s.key, s.count]));
+    const rows = p.milestones.map((m, n) => ({
+      no: n + 1, milestone: m.label, scheduled: m.scheduled, due: m.due, achieved_due: m.achieved_due, achieved_pct: m.achieved_pct == null ? '—' : `${m.achieved_pct}%`,
+      on_time: m.on_time, late: m.late, overdue: m.overdue, achieved: m.achieved, at_stage: atStage.get(m.key) || 0
+    }));
+    return {
+      title: `Procurement progress by Time Schedule milestone — ${fy}`,
+      subtitle: `Annual plan procurements, counted by procurement (not by value), against the Procurement Time Schedule set when execution was authorised (or the approved plan dates where none was set), as at ${today}. "Due" = the schedule date has arrived; "overdue" = due but not achieved; "at this stage" = procurements whose furthest achieved milestone is this one.`,
+      columns: [{ key: 'no', label: 'No.' }, { key: 'milestone', label: 'Milestone' }, { key: 'scheduled', label: 'Scheduled', align: 'right', int: true }, { key: 'due', label: 'Due by today', align: 'right', int: true },
+        { key: 'achieved_due', label: 'Achieved (of due)', align: 'right', int: true }, { key: 'achieved_pct', label: '% achieved', align: 'right' }, { key: 'on_time', label: 'On time', align: 'right', int: true },
+        { key: 'late', label: 'Late', align: 'right', int: true }, { key: 'overdue', label: 'Overdue', align: 'right', int: true }, { key: 'achieved', label: 'Achieved (all)', align: 'right', int: true }, { key: 'at_stage', label: 'At this stage', align: 'right', int: true }],
+      rows: [...rows, { _total: true, milestone: `Total — ${p.stages[0].count} of ${p.procurements} not started`, scheduled: rows.reduce((s, r) => s + r.scheduled, 0), due: p.overall.due,
+        achieved_due: p.overall.achieved_of_due, achieved_pct: p.overall.achieved_pct == null ? '—' : `${p.overall.achieved_pct}%`, on_time: p.overall.on_time,
+        late: p.overall.achieved - p.overall.on_time, overdue: p.overall.overdue, achieved: p.overall.achieved, at_stage: p.procurements }],
+      summary: [
+        { label: 'Procurements', value: p.procurements }, { label: 'Milestones due by today', value: p.overall.due },
+        { label: 'Due milestones achieved', value: p.overall.achieved_pct == null ? '—' : `${p.overall.achieved_pct}%` },
+        { label: 'Achieved on time', value: p.overall.on_time_pct == null ? '—' : `${p.overall.on_time_pct}%` }, { label: 'Milestones overdue', value: p.overall.overdue }
+      ]
+    };
+  },
+
+  // Which procurements were done within the Procurement Time Schedule (contract signed by its schedule date).
+  async 'schedule-compliance'(items, q, fy) {
+    const today = new Date().toISOString().slice(0, 10);
+    const ORDER = { overdue: 0, done_late: 1, in_schedule: 2, no_schedule: 3, done_on_time: 4 };
+    const sel = items.filter(i => i.year_offset === 0 && i.status !== 'cancelled').map(i => ({ i, c: progress.complianceOf(i, today) }))
+      .sort((a, b) => ORDER[a.c.state] - ORDER[b.c.state] || (b.c.days || 0) - (a.c.days || 0));
+    const sum = progress.complianceSummary(sel.map(x => x.i), today);
+    const rows = sel.map(({ i, c }, n) => ({
+      no: n + 1, bid_no: i.bid_no || '', ref_no: i.ref_no, title: i.title, department: i.department, method: i.method || '', tce_incl: r2(incl(i)),
+      target: c.target || '', done: c.done || '', result: progress.COMPLIANCE[c.state],
+      days: c.days == null ? '' : c.state === 'done_on_time' ? (c.days < 0 ? `${-c.days} d early` : 'on the day') : c.state === 'done_late' ? `${c.days} d late`
+        : c.state === 'overdue' ? `${c.days} d overdue` : `${-c.days} d left`
+    }));
+    const n = s => sum.by_state[s].count;
+    return {
+      title: `Procurements done and not done within the Procurement Time Schedule — ${fy}`,
+      subtitle: `Annual plan procurements. "Done" = ${progress.DONE_LABEL.toLowerCase()} recorded; compared with its date in the Procurement Time Schedule (set when execution was authorised, or the approved plan date where none was set). As at ${today}. Values in LKR million.`,
+      columns: [{ key: 'no', label: 'No.' }, { key: 'bid_no', label: 'Bid No' }, { key: 'ref_no', label: 'Ref' }, { key: 'title', label: 'Procurement' }, { key: 'department', label: 'Department' },
+        { key: 'method', label: 'Method' }, { key: 'tce_incl', label: 'TCE incl. VAT', ...money }, { key: 'target', label: `Schedule: ${progress.DONE_LABEL.toLowerCase()}` },
+        { key: 'done', label: 'Done on' }, { key: 'result', label: 'Result' }, { key: 'days', label: 'Days' }],
+      rows: [...rows, totalsRow(rows, ['tce_incl'], `Total — ${sum.total} procurements`)], landscape: true,
+      summary: [
+        { label: 'Done within schedule', value: n('done_on_time') }, { label: 'Done, but late', value: n('done_late') },
+        { label: 'Not done — schedule passed', value: n('overdue') }, { label: 'Not done — still within schedule', value: n('in_schedule') + n('no_schedule') },
+        { label: 'Done on time (of those done)', value: sum.done_on_time_pct == null ? '—' : `${sum.done_on_time_pct}%` },
+        { label: 'Within schedule (of those due)', value: sum.within_schedule_pct == null ? '—' : `${sum.within_schedule_pct}%` }
       ]
     };
   },

@@ -51,3 +51,36 @@ test('e-mails carry the date, letter reference and signature block', () => {
   assert.doesNotMatch(bare.text, /Our ref/);
   assert.match(bare.text, /Thank you\.\n\nLECO$/);
 });
+
+test('the BEC has two tasks tied to their milestones', () => {
+  assert.strictEqual(tec.STAGES[1].milestone, 'prep_docs');
+  assert.strictEqual(tec.STAGES[2].milestone, 'evaluation');
+});
+
+test('each task is measured from its own activation, not the appointment', () => {
+  const rows = [
+    // task 1: appointed 1 Jan, due 21 Jan, submitted 20 Jan -> on time
+    { stage: 1, appointed_on: '2027-01-01', activated_on: '2027-01-01', due_date: '2027-01-21', submitted_on: '2027-01-20' },
+    // task 2: started 1 Apr (after bid opening), due 21 Apr, submitted 24 Apr -> 3 days late, 23 days taken
+    { stage: 2, appointed_on: '2027-01-01', activated_on: '2027-04-01', due_date: '2027-04-21', submitted_on: '2027-04-24' }
+  ];
+  const o2 = tec.outcome(rows[1], '2027-05-01');
+  assert.deepStrictEqual([o2.key, o2.allowed, o2.taken, o2.late], ['late', 20, 23, 3]);
+  const p = tec.performance(rows, '2027-05-01');
+  assert.deepStrictEqual([p.on_time, p.late, p.on_time_pct, p.avg_days_taken], [1, 1, 50, 21]);
+  // a task closed without the member's submission
+  assert.strictEqual(tec.outcome({ activated_on: '2027-01-01', due_date: '2027-01-21', stage_completed_on: '2027-01-22' }, '2027-02-01').key, 'not_submitted');
+});
+
+test('appointment explains both tasks; activation e-mail gives the evaluation due date', () => {
+  const c = { bid_no: 'T/2026/0001', ref_no: 'ENG-2026-0002', title: 'Transformers', department: 'Engineering', appointed_on: '2026-10-13', due_date: '2026-11-03' };
+  const a = tec.appointmentMail({ member: { name: 'A' }, role: 'member', c, org: 'LECO', today: '2026-10-13' });
+  assert.match(a.subject, /Bid Evaluation Committee/);
+  assert.match(a.text, /1\. Preparation of bidding documents \/ specifications — starts now; to be completed by 3 November 2026/);
+  assert.match(a.text, /2\. Bid evaluation — you will be notified separately/);
+  const s2 = tec.stageActivatedMail({ member: { name: 'A' }, c: { ...c, stage_due: '2027-01-15' }, stage: 2, org: 'LECO', today: '2026-12-20' });
+  assert.match(s2.subject, /^Bid evaluation task started — T\/2026\/0001 — due 15 January 2027/);
+  const r = tec.reminderMail({ member: { name: 'A' }, c: { ...c, stage_due: '2027-01-15' }, stage: 2, kind: 'before', today: '2027-01-08' });
+  assert.match(r.subject, /^Reminder: Bid evaluation for T\/2026\/0001/);
+  assert.match(r.text, /task 2 of 2/);
+});

@@ -80,6 +80,68 @@ function MyPending({ p }) {
   );
 }
 
+// Done / not done within the Procurement Time Schedule (shared with the Board / CEO page).
+export const SCHEDULE_STATES = [
+  ['done_on_time', 'Done within schedule', 'ok'], ['done_late', 'Done, but late', 'warn'],
+  ['overdue', 'Not done — schedule passed', 'bad'], ['in_schedule', 'Not done — still within schedule', '']
+];
+export function ScheduleTiles({ s }) {
+  return (
+    <div className="grid g4" style={{ marginTop: 12 }}>
+      {SCHEDULE_STATES.map(([k, l, cls]) => {
+        const n = s.by_state[k].count + (k === 'in_schedule' ? s.by_state.no_schedule.count : 0);
+        return <div key={k} className={'stat ' + (n ? cls : '')}><div className="v">{n}</div><div className="l">{l}{s.total ? ` · ${Math.round((n / s.total) * 100)}%` : ''}</div></div>;
+      })}
+    </div>
+  );
+}
+
+// Progress counted by procurement against the Procurement Time Schedule, milestone by milestone, starting
+// with the appointment of the Procurement Committee.
+function MilestoneProgress({ d }) {
+  const p = d.progress;
+  if (!p || !p.milestones) return null;
+  const m = p.milestones; const s = p.schedule;
+  return (
+    <div className="grid g2" style={{ marginTop: 22 }}>
+      <div className="card">
+        <div className="between"><h2 style={{ margin: 0 }}>Progress by Time Schedule milestone — {d.plan_fy}</h2><Link to="/app/reports" className="hint" style={{ margin: 0 }}>Report</Link></div>
+        <p className="hint">Counted by procurement (not by value) against the Procurement Time Schedule. Bar = milestones achieved of those due by today.</p>
+        {m.procurements === 0 ? <div className="empty">No procurements in the annual plan.</div> : (
+          <>
+            <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', marginBottom: 10 }}>
+              <div><div className="bigpct" style={{ fontSize: 28 }}>{m.overall.achieved_pct == null ? '—' : m.overall.achieved_pct + '%'}</div><div className="hint" style={{ margin: 0 }}>due milestones achieved ({m.overall.achieved_of_due} of {m.overall.due})</div></div>
+              <div><div className="bigpct" style={{ fontSize: 28 }}>{m.overall.on_time_pct == null ? '—' : m.overall.on_time_pct + '%'}</div><div className="hint" style={{ margin: 0 }}>achieved on time</div></div>
+              <div><div className="bigpct" style={{ fontSize: 28, color: m.overall.overdue ? 'var(--bad)' : 'var(--good)' }}>{m.overall.overdue}</div><div className="hint" style={{ margin: 0 }}>milestones overdue</div></div>
+            </div>
+            <div className="tbl-wrap" style={{ maxHeight: 'none' }}><table>
+              <thead><tr><th>Milestone</th><th style={{ textAlign: 'right' }}>Due</th><th style={{ textAlign: 'right' }}>Achieved</th><th style={{ width: 120 }}></th><th style={{ textAlign: 'right' }}>Late</th><th style={{ textAlign: 'right' }}>Overdue</th><th style={{ textAlign: 'right' }}>At stage</th></tr></thead>
+              <tbody>{m.milestones.map(r => {
+                const at = m.stages.find(x => x.key === r.key)?.count || 0;
+                return (
+                  <tr key={r.key}><td className="wrap">{r.label}</td><td style={{ textAlign: 'right' }}>{r.due}</td><td style={{ textAlign: 'right' }}>{r.achieved_due}</td>
+                    <td>{r.due ? <div className={'bar' + (r.overdue ? ' over' : '')}><div style={{ width: (r.achieved_pct || 0) + '%' }}></div></div> : <span className="hint" style={{ margin: 0 }}>not due yet</span>}</td>
+                    <td style={{ textAlign: 'right' }}>{r.late || ''}</td><td style={{ textAlign: 'right' }}>{r.overdue ? <span className="pill bad">{r.overdue}</span> : ''}</td><td style={{ textAlign: 'right' }}>{at || ''}</td></tr>
+                );
+              })}</tbody>
+            </table></div>
+            <p className="hint" style={{ marginTop: 6 }}>Not started (no milestone achieved): {m.stages[0].count} of {m.procurements}.</p>
+          </>
+        )}
+      </div>
+      <div className="card">
+        <h2>Within the Procurement Time Schedule — {d.plan_fy}</h2>
+        <p className="hint">A procurement is done when the {s.done_milestone.toLowerCase()} is recorded, compared with its date in the Procurement Time Schedule.</p>
+        <ScheduleTiles s={s} />
+        <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', marginTop: 14 }}>
+          <div><div className="bigpct" style={{ fontSize: 28 }}>{s.within_schedule_pct == null ? '—' : s.within_schedule_pct + '%'}</div><div className="hint" style={{ margin: 0 }}>done within schedule, of those due</div></div>
+          <div><div className="bigpct" style={{ fontSize: 28 }}>{s.done} / {s.total}</div><div className="hint" style={{ margin: 0 }}>procurements done</div></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PlanProgress({ d }) {
   const p = d.progress;
   const scope = d.role === 'requester' || d.role === 'dept_head' ? 'your unit' : 'all departments';
@@ -162,6 +224,7 @@ export default function DashboardPage() {
         {deptRole && <Stat v={d.pending.requests.length} l="Your requests in progress" cls={d.pending.requests.some(r => r.status === 'returned') ? 'bad' : d.pending.requests.length ? 'warn' : 'ok'} to="/app/requests" />}
         {deptRole && <Stat v={t.execution_requests_pending} l="Your execution requests awaiting procurement" cls={t.execution_requests_pending ? 'warn' : 'ok'} to="/app/execution" />}
         {role !== 'supplies' && <Stat v={d.delayed_count} l="Items with overdue milestones" cls={d.delayed_count ? 'bad' : 'ok'} to="/app/execution" />}
+        {d.bec && <Stat v={d.bec.overdue} l={`BEC tasks overdue · ${d.bec.in_stage1} preparing documents, ${d.bec.in_stage2} evaluating${d.bec.awaiting_stage2 ? `, ${d.bec.awaiting_stage2} awaiting bid evaluation start` : ''}`} cls={d.bec.overdue ? 'bad' : d.bec.awaiting_stage2 ? 'warn' : 'ok'} to="/app/tec" />}
         {d.supplies && (role === 'supplies' || role === 'admin') && <Stat v={d.supplies.awaiting_acceptance} l="Supplies files to accept" cls={d.supplies.awaiting_acceptance ? 'warn' : 'ok'} to="/app/supplies" />}
         {d.supplies && <Stat v={d.supplies.with_overdue_steps} l="Supplies files with overdue steps" cls={d.supplies.with_overdue_steps ? 'bad' : 'ok'} to="/app/supplies" />}
         {d.supplies && <Stat v={d.supplies.deliveries_overdue} l="Deliveries overdue" cls={d.supplies.deliveries_overdue ? 'bad' : 'ok'} to="/app/supplies" />}
@@ -171,6 +234,7 @@ export default function DashboardPage() {
       {deptRole && <MyPending p={d.pending} />}
 
       <div style={{ marginTop: 22 }}><PlanProgress d={d} /></div>
+      <MilestoneProgress d={d} />
 
       <div className="grid g2" style={{ marginTop: 22 }}>
         <div className="card">

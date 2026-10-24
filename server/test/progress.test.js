@@ -53,3 +53,39 @@ test('groupSummaries groups by key, biggest value first', () => {
   const rows = p.groupSummaries([item({ dept: 'A', tce_excl_vat_mn: 10 }), item({ dept: 'B', tce_excl_vat_mn: 50 }), item({ dept: 'A', tce_excl_vat_mn: 10 })], '2027-01-01', i => i.dept);
   assert.deepStrictEqual(rows.map(r => [r.name, r.count]), [['B', 1], ['A', 2]]);
 });
+
+const progress = p;
+const msDates = (dates, actuals = {}) => Object.fromEntries(Object.entries(dates).map(([k, d]) => [k, { scheduled: d, revised: null, actual: actuals[k] || null }]));
+
+test('milestone progress counts due, achieved, on time, late and overdue per milestone', () => {
+  const a = { status: 'in_progress', milestones: msDates({ appoint_pc: '2027-01-05', appoint_bec: '2027-01-10', prep_docs: '2027-02-01' }, { appoint_pc: '2027-01-04', appoint_bec: '2027-01-12' }) };
+  const b = { status: 'planned', milestones: msDates({ appoint_pc: '2027-01-08', appoint_bec: '2027-01-20' }) };
+  const p = progress.milestoneProgress([a, b, { status: 'cancelled', milestones: {} }], '2027-01-15');
+  const pc = p.milestones.find(m => m.key === 'appoint_pc');
+  assert.deepStrictEqual([pc.due, pc.achieved_due, pc.on_time, pc.late, pc.overdue], [2, 1, 1, 0, 1]);
+  const bec = p.milestones.find(m => m.key === 'appoint_bec');
+  assert.deepStrictEqual([bec.due, bec.achieved_due, bec.late, bec.overdue], [1, 1, 1, 0]);
+  assert.strictEqual(p.procurements, 2);
+  assert.strictEqual(p.overall.due, 3);
+  assert.strictEqual(p.overall.achieved_pct, 66.7);
+  assert.strictEqual(p.stages.find(s => s.key === 'not_started').count, 1);
+  assert.strictEqual(p.stages.find(s => s.key === 'appoint_bec').count, 1);
+});
+
+test('the custom Time Schedule (weeks) is the target, not later revised dates', () => {
+  const weeks = Object.fromEntries(require('../src/rules').MILESTONES.map(m => [m.key, 1]));
+  const item = { schedule_mode: 'custom', schedule_start: '2027-01-04', schedule_weeks: weeks, milestones: { appoint_pc: { scheduled: '2026-12-01', revised: '2027-03-01', actual: null } } };
+  assert.strictEqual(progress.scheduleDates(item).appoint_pc, '2027-01-11');
+});
+
+test('schedule compliance: done on time, late, overdue and still within schedule', () => {
+  const t = '2027-06-01';
+  const on = { status: 'awarded', milestones: msDates({ signing: '2027-05-01' }, { signing: '2027-04-28' }) };
+  const late = { status: 'awarded', milestones: msDates({ signing: '2027-05-01' }, { signing: '2027-05-11' }) };
+  const over = { status: 'in_progress', milestones: msDates({ signing: '2027-05-15' }) };
+  const ahead = { status: 'planned', milestones: msDates({ signing: '2027-09-01' }) };
+  assert.deepStrictEqual([on, late, over, ahead].map(i => progress.complianceOf(i, t).state), ['done_on_time', 'done_late', 'overdue', 'in_schedule']);
+  assert.strictEqual(progress.complianceOf(late, t).days, 10);
+  const s = progress.complianceSummary([on, late, over, ahead], t);
+  assert.deepStrictEqual([s.done, s.not_done, s.done_on_time_pct, s.within_schedule_pct], [2, 2, 50, 33.3]);
+});

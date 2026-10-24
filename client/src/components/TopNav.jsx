@@ -15,7 +15,7 @@ const TABS = [
   ['plan', 'Plan', null],
   ['revisions', 'Revisions', ['procurement', 'management', 'admin', 'executive']],
   ['execution', 'Execution', null],
-  ['tec', 'TEC', ['procurement', 'management', 'admin', 'executive']],
+  ['tec', 'BEC / TEC', ['procurement', 'management', 'admin', 'executive']],
   ['supplies-progress', 'Supplies progress', 'supplies'],
   ['supplies', 'Supplies files', 'supplies'],
   ['budgets', 'Budgets', null],

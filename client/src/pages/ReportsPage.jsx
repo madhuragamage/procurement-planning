@@ -18,7 +18,12 @@ const REPORTS = [
   ['by-method', 'Summary by method'],
   ['by-committee', 'Summary by committee'],
   ['performance', 'Quarterly Procurement Performance Report'],
+  ['milestone-progress', 'Progress by Time Schedule milestone'],
+  ['schedule-compliance', 'Done / not done within the Procurement Time Schedule'],
   ['budget', 'Budget availability'],
+  ['tec:progress', 'BEC / TEC progress by task — bidding documents and bid evaluation'],
+  ['tec:members', 'BEC member progress — tasks completed within allocated time'],
+  ['tec:assignments', 'BEC task details — time allowed and taken per task'],
   ['supplies:status', 'Supplies — status update schedule'],
   ['supplies:bonds', 'Supplies — bond register'],
   ['supplies:delay-waiver', 'Supplies — delay waiver / extension approval schedule']
@@ -32,6 +37,7 @@ export default function ReportsPage() {
   const [cat, setCat] = useState('');
   const [expense, setExpense] = useState('');
   const [yearOffset, setYearOffset] = useState(0);
+  const [tecAll, setTecAll] = useState(false);
   const [quarter, setQuarter] = useState(Math.min(4, Math.floor(new Date().getMonth() / 3) + 1));
   const [report, setReport] = useState(null);
   const [error, setError] = useState('');
@@ -39,13 +45,15 @@ export default function ReportsPage() {
 
   useEffect(() => {
     setLoading(true); setError('');
-    const path = type.startsWith('supplies:') ? `/supplies/reports/${type.slice(9)}` : type === 'budget' ? '/reports/budget' + qs({ year: fy, expense_type: expense }) : `/reports/${type}` + qs({ plan_fy: fy, department_id: dept, category_id: cat, expense_type: expense, quarter: type === 'performance' ? quarter : undefined, year_offset: type === 'year-plan' ? yearOffset : undefined });
+    const path = type.startsWith('tec:') ? (type === 'tec:progress' ? '/tec/reports-progress' : `/tec/reports/${type.slice(4)}`) + qs({ plan_fy: tecAll ? undefined : fy }) : type.startsWith('supplies:') ? `/supplies/reports/${type.slice(9)}` : type === 'budget' ? '/reports/budget' + qs({ year: fy, expense_type: expense }) : `/reports/${type}` + qs({ plan_fy: fy, department_id: dept, category_id: cat, expense_type: expense, quarter: type === 'performance' ? quarter : undefined, year_offset: type === 'year-plan' ? yearOffset : undefined });
     api.get(path).then(setReport).catch(e => { setReport(null); setError(e.message); }).finally(() => setLoading(false));
-  }, [type, fy, dept, cat, expense, quarter, yearOffset]);
+  }, [type, fy, dept, cat, expense, quarter, yearOffset, tecAll]);
 
-  const filterable = type !== 'budget' && !type.startsWith('supplies:');
+  const filterable = type !== 'budget' && !type.startsWith('supplies:') && !type.startsWith('tec:');
   // Supplies Unit officers only see the Supplies reports (their own files).
-  const reports = REPORTS.filter(([k]) => (user.role === 'supplies' ? k.startsWith('supplies:') : !k.startsWith('supplies:') || canSeeSupplies(user, lookups)));
+  const TEC_ROLES = ['procurement', 'management', 'admin', 'executive'];
+  const reports = REPORTS.filter(([k]) => (user.role === 'supplies' ? k.startsWith('supplies:')
+    : k.startsWith('tec:') ? TEC_ROLES.includes(user.role) : !k.startsWith('supplies:') || canSeeSupplies(user, lookups)));
 
   return (
     <div>
@@ -57,7 +65,9 @@ export default function ReportsPage() {
             <select value={dept} onChange={e => setDept(e.target.value)}><option value="">All</option>{lookups.departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>}
           {filterable && <label className="field"><span>Category</span>
             <select value={cat} onChange={e => setCat(e.target.value)}><option value="">All</option>{lookups.categories.map(c => <option key={c.id} value={c.id}>{MAIN_CATEGORY_LABEL[c.manual_type]} / {c.name}</option>)}</select></label>}
-          {!type.startsWith('supplies:') && <label className="field"><span>Budget category</span>
+          {type.startsWith('tec:') && <label className="field"><span>Committees</span>
+            <select value={tecAll ? 'all' : 'fy'} onChange={e => setTecAll(e.target.value === 'all')}><option value="fy">{fy} plan cycle</option><option value="all">All plan cycles</option></select></label>}
+          {!type.startsWith('supplies:') && !type.startsWith('tec:') && <label className="field"><span>Budget category</span>
             <select value={expense} onChange={e => setExpense(e.target.value)}><option value="">Both</option>{lookups.expenseTypes.map(x => <option key={x} value={x}>{x}</option>)}</select></label>}
           {type === 'year-plan' && <label className="field"><span>Year</span>
             <select value={yearOffset} onChange={e => setYearOffset(Number(e.target.value))}>{YEAR_LABELS(fy).map((l, i) => <option key={i} value={i}>{l}</option>)}</select></label>}

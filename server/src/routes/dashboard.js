@@ -107,7 +107,10 @@ router.get('/', wrap(async (req, res) => {
   const prog = tracking ? {
     overall: progress.summarise(items, t),
     by_department: wide ? progress.groupSummaries(items, t, i => i.department) : [],
-    by_category: progress.groupSummaries(items, t, i => i.category)
+    by_category: progress.groupSummaries(items, t, i => i.category),
+    // counted by procurement against the Procurement Time Schedule
+    milestones: progress.milestoneProgress(items, t),
+    schedule: { ...progress.complianceSummary(items, t), done_milestone: progress.DONE_LABEL }
   } : null;
 
   const delayed = items.filter(i => tracking && progress.isOverdue(i, t))
@@ -120,6 +123,7 @@ router.get('/', wrap(async (req, res) => {
     plans: planRows,
     todo: { to_authorise: toAuthorise[0].n, to_plan: toPlan[0].n, plans_awaiting_approval: planSubmitted[0].n, revisions_awaiting_approval: revSubmitted[0].n, execution_requests_pending: execPending[0].n, change_requests_pending: changePending[0].n, change_requests_to_authorise: changeToAuthorise[0].n },
     progress: prog, pending,
+    bec: ['procurement', 'admin', 'management'].includes(req.user.role) ? await require('./tec').dashboardCounts() : null,
     supplies: req.user.role !== 'executive' && await require('./lookups').canViewSupplies(req.user) ? await require('./supplies').dashboardCounts(req.user) : null,
     reminders: await loadReminders(req.user, t),
     delayed: delayed.slice(0, 10), delayed_count: delayed.length,
@@ -153,6 +157,16 @@ router.get('/board', requireRole('admin', 'management', 'executive', 'procuremen
       overdue_days: d.max_overdue_days, overdue_milestone: d.overdue[0] ? d.overdue[0].label : null, start: i.procurement_start, delivery: i.expected_delivery };
   };
   const topValue = [...annual].sort((a, b) => incl(b) - incl(a)).slice(0, 10).map(row);
+
+  // Done / not done within the Procurement Time Schedule, overall and by division, plus the late and overdue ones.
+  const schedule = tracking ? {
+    done_milestone: progress.DONE_LABEL, ...progress.complianceSummary(annual, t),
+    by_division: progress.complianceGroups(annual, t, i => i.division || 'Unassigned'),
+    exceptions: annual.map(i => ({ i, c: progress.complianceOf(i, t) })).filter(x => ['overdue', 'done_late'].includes(x.c.state))
+      .sort((a, b) => b.c.days - a.c.days).slice(0, 12)
+      .map(({ i, c }) => ({ id: i.id, bid_no: i.bid_no, ref_no: i.ref_no, title: i.title, department: i.department, value: r2(incl(i)), state: c.state, target: c.target, done: c.done, days: c.days }))
+  } : null;
+  const milestones = tracking ? progress.milestoneProgress(annual, t) : null;
   const delayed = tracking ? annual.filter(i => progress.isOverdue(i, t)).map(row).sort((a, b) => b.overdue_days - a.overdue_days).slice(0, 10) : [];
 
   const [depts] = await pool.query('SELECT d.id, v.name AS division FROM departments d LEFT JOIN divisions v ON v.id = d.division_id');
@@ -173,7 +187,7 @@ router.get('/board', requireRole('admin', 'management', 'executive', 'procuremen
     today: t, plan_fy: fy, plan, tracking,
     headline: { ...overall, annual_value: overall.value, three_year_value: threeYear, savings: r2(overall.awarded_estimate - overall.awarded_value) },
     by_year: byYear, by_division: byDivision, by_department: byDepartment, by_method: byMethod, by_committee: byCommittee,
-    top_value: topValue, delayed,
+    top_value: topValue, delayed, schedule, milestones,
     budget: [...budgetByDiv.values()].map(b => ({ ...b, allocated: r2(b.allocated), committed: r2(b.committed) })).sort((a, b) => b.committed - a.committed),
     pipeline: { requests: Object.fromEntries(reqCounts.map(r => [r.status, r.n])), execution_requests_pending: execPending.n, revisions_pending: revPending.n, starting_soon_without_request: reminders.items.length },
     deadlines: deadlinesFor(t)

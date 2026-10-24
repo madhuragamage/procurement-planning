@@ -34,7 +34,7 @@ export default function ReportTable({ report, filename }) {
                   <tr key={i} className={r._total ? 'total-row' : ''}>
                     {columns.map(c => (
                       <td key={c.key} style={{ textAlign: isMoney(c) ? 'right' : 'left' }}>
-                        {isMoney(c) && typeof r[c.key] === 'number' && c.key !== 'count' && c.key !== 'delay_days' ? fmt(r[c.key]) : (r[c.key] ?? '')}
+                        {isMoney(c) && !c.int && typeof r[c.key] === 'number' && c.key !== 'count' && c.key !== 'delay_days' ? fmt(r[c.key]) : (r[c.key] ?? '')}
                       </td>
                     ))}
                   </tr>

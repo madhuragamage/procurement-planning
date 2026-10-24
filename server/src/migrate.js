@@ -13,7 +13,8 @@ const MIGRATIONS = [
   { id: '009_execution_schedule', run: require('./migrations/009_execution_schedule') },
   { id: '010_tec_letter_ref', run: require('./migrations/010_tec_letter_ref') },
   { id: '011_categories_budget_codes', run: require('./migrations/011_categories_budget_codes') },
-  { id: '012_category_order', run: require('./migrations/012_category_order') }
+  { id: '012_category_order', run: require('./migrations/012_category_order') },
+  { id: '013_bec_two_stages', run: require('./migrations/013_bec_two_stages') }
 ];
 
 async function waitForDb(retries = 30) {
