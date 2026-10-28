@@ -52,7 +52,7 @@ function ChangeForm({ revision, fy, items, requests, onAdded }) {
           <label className="field" style={{ gridColumn: 'span 2' }}><span>Authorised request (cycle {fy})</span>
             <select value={requestId} onChange={e => setRequestId(e.target.value)} required>
               <option value="">Select…</option>
-              {requests.map(r => <option key={r.id} value={r.id}>{r.ref_no} — {r.title}</option>)}
+              {requests.map(r => <option key={r.id} value={r.id}>{r.ref_no} — {r.title}{r.mgmt_rejected_at ? ' (rejected by management — resubmit)' : ''}</option>)}
             </select></label>
         ) : (
           <label className="field" style={{ gridColumn: 'span 2' }}><span>Plan item</span>
@@ -134,7 +134,10 @@ export default function RevisionsPage() {
     const takenRequests = new Set(claims.requests.map(c => c.request_id));
     const cancelledItems = new Set(claims.cancelled_items.map(c => c.item_id));
     setItems((await api.get('/plan-items?plan_fy=' + fy)).filter(i => !cancelledItems.has(i.id)));
-    setRequests((await api.get('/requests?status=authorised&unplanned=1')).filter(r => r.plan_fy === fy && !takenRequests.has(r.id)));
+    // Authorised requests not yet planned, plus requests management rejected from this plan (resubmission).
+    const authorised = await api.get('/requests?status=authorised&unplanned=1');
+    const rejected = (await api.get('/requests?status=rejected')).filter(r => r.mgmt_rejected_at);
+    setRequests([...authorised, ...rejected].filter(r => r.plan_fy === fy && !takenRequests.has(r.id)));
     setDeptRequests(await api.get(`/change-requests?status=pending&plan_fy=${fy}`));
     if (openId) {
       setRev(await api.get('/revisions/' + openId));

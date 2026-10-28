@@ -177,9 +177,10 @@ router.post('/:id/changes', requireRole(...PROC), wrap(async (req, res) => {
   let itemId = null; let payload = {};
   if (action === 'add') {
     const requestId = Number(req.body.request_id);
-    const [[r]] = await pool.query('SELECT id, status, plan_fy, ref_no FROM requests WHERE id = ?', [requestId]);
+    const [[r]] = await pool.query('SELECT id, status, plan_fy, ref_no, mgmt_rejected_at FROM requests WHERE id = ?', [requestId]);
     if (!r) throw new HttpError(404, 'Request not found.');
-    if (r.status !== 'authorised') throw new HttpError(409, 'Only department-head-authorised requests can be added.');
+    // Authorised requests, or ones management removed from the plan earlier (resubmitted through this revision).
+    if (r.status !== 'authorised' && !(r.status === 'rejected' && r.mgmt_rejected_at)) throw new HttpError(409, 'Only department-head-authorised requests, or requests rejected by management, can be added.');
     if (r.plan_fy !== v.plan_fy) throw new HttpError(400, `Request ${r.ref_no} belongs to the ${r.plan_fy} plan cycle.`);
     const [[dupe]] = await pool.query('SELECT id FROM plan_items WHERE request_id = ?', [requestId]);
     if (dupe) throw new HttpError(409, 'That request is already in the plan.');

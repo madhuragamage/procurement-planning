@@ -47,12 +47,26 @@ router.post('/', requireRole(...PROC), wrap(async (req, res) => {
   res.status(201).json(withDerived(await lib.loadItem(id), limits));
 }));
 
-router.put('/:id', requireRole(...PROC), wrap(async (req, res) => {
+// Fields shown in management's amendment log (old -> new).
+const AMEND_LABEL = {
+  title: 'title', description: 'description', tce_excl_vat_mn: 'TCE excl. VAT', vat_pct: 'VAT %', funding_source: 'funding', funding_agency: 'funding agency',
+  year_offset: 'plan year', method: 'method', bidding_procedure: 'procedure', prequalification: 'prequalification', committee_level: 'committee',
+  procurement_start: 'procurement start', expected_delivery: 'expected delivery', remarks: 'remarks'
+};
+const itemRef = async (conn, item) => {
+  const [[r]] = await conn.query("SELECT CONCAT(ref_no, IF(? > 0, CONCAT('/R', ?), '')) AS ref FROM requests WHERE id = ?", [item.recur_index, item.recur_index, item.request_id]);
+  return r ? r.ref : '#' + item.id;
+};
+
+// Procurement edits items while the plan is being prepared; management may amend them while the plan is
+// submitted for its approval.
+router.put('/:id', requireRole(...PROC, 'management'), wrap(async (req, res) => {
   const limits = await loadLimits();
   await tx(async conn => {
     const [[cur]] = await conn.query('SELECT * FROM plan_items WHERE id = ? FOR UPDATE', [Number(req.params.id)]);
     if (!cur) throw new HttpError(404, 'Plan item not found.');
-    await lib.assertPlanEditable(cur.plan_fy, conn);
+    await lib.assertPlanEditable(cur.plan_fy, conn, req.user);
+    const mgmt = req.user.role === 'management';
     const f = lib.parseItemFields(req.body);
     const merged = { ...cur, ...f };
     if (merged.expected_delivery && merged.procurement_start && merged.expected_delivery < merged.procurement_start) {
@@ -67,17 +81,35 @@ router.put('/:id', requireRole(...PROC), wrap(async (req, res) => {
     }
     const cols = Object.keys(f);
     if (!cols.length) throw new HttpError(400, 'Nothing to update.');
-    await conn.query(`UPDATE plan_items SET ${cols.map(c => c + ' = ?').join(', ')} WHERE id = ?`, [...cols.map(c => f[c]), cur.id]);
-    await audit(conn, 'plan_item', cur.id, 'edit', req.user.id, cols.filter(c => c !== 'milestones').join(', '));
+    if (mgmt) { f.mgmt_amended_at = new Date(); f.mgmt_amended_by = req.user.id; }
+    await conn.query(`UPDATE plan_items SET ${Object.keys(f).map(c => c + ' = ?').join(', ')} WHERE id = ?`, [...Object.keys(f).map(c => f[c]), cur.id]);
+    if (mgmt) {
+      const show = v => (v == null || v === '' ? '—' : v instanceof Date ? v.toISOString().slice(0, 10) : String(v));
+      const changes = Object.keys(AMEND_LABEL).filter(k => k in f && show(cur[k]) !== show(f[k])).map(k => `${AMEND_LABEL[k]} ${show(cur[k])} → ${show(f[k])}`);
+      await audit(conn, 'plan_item', cur.id, 'mgmt-amend', req.user.id, `${await itemRef(conn, cur)} ${cur.title}: ${changes.join('; ') || 'no field changed'}`);
+    } else {
+      await audit(conn, 'plan_item', cur.id, 'edit', req.user.id, cols.filter(c => c !== 'milestones').join(', '));
+    }
   });
   res.json(withDerived(await lib.loadItem(Number(req.params.id)), limits));
 }));
 
-router.delete('/:id', requireRole(...PROC), wrap(async (req, res) => {
+router.delete('/:id', requireRole(...PROC, 'management'), wrap(async (req, res) => {
   await tx(async conn => {
     const [[cur]] = await conn.query('SELECT * FROM plan_items WHERE id = ? FOR UPDATE', [Number(req.params.id)]);
     if (!cur) throw new HttpError(404, 'Plan item not found.');
-    await lib.assertPlanEditable(cur.plan_fy, conn);
+    await lib.assertPlanEditable(cur.plan_fy, conn, req.user);
+    // Management removing an item while approving: logged against the plan, since the item row goes.
+    if (req.user.role === 'management') {
+      const reason = req.body && req.body.reason ? String(req.body.reason).trim().slice(0, 300) : '';
+      await audit(conn, 'plan', cur.plan_fy, 'mgmt-remove', req.user.id, `${await itemRef(conn, cur)} ${cur.title} removed from the plan${reason ? `: ${reason}` : ''}`);
+      // The request itself (not just one repeat) is rejected by management - it does not go back to the inbox.
+      if (cur.recur_index === 0) {
+        await conn.query("UPDATE requests SET status = 'rejected', mgmt_rejected_at = NOW(), mgmt_rejected_by = ?, review_comment = ? WHERE id = ?",
+          [req.user.id, `Removed from the ${cur.plan_fy} plan by management${reason ? `: ${reason}` : ''}`, cur.request_id]);
+        await audit(conn, 'request', cur.request_id, 'rejected-by-management', req.user.id, reason || null);
+      }
+    }
     // Removing the item itself also removes its projected repeats, so the request can be planned again.
     const [repeats] = cur.recur_index === 0
       ? await conn.query('SELECT id FROM plan_items WHERE request_id = ? AND recur_index > 0', [cur.request_id]) : [[]];

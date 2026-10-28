@@ -14,7 +14,9 @@ const MIGRATIONS = [
   { id: '010_tec_letter_ref', run: require('./migrations/010_tec_letter_ref') },
   { id: '011_categories_budget_codes', run: require('./migrations/011_categories_budget_codes') },
   { id: '012_category_order', run: require('./migrations/012_category_order') },
-  { id: '013_bec_two_stages', run: require('./migrations/013_bec_two_stages') }
+  { id: '013_bec_two_stages', run: require('./migrations/013_bec_two_stages') },
+  { id: '014_mgmt_amend_ref_numbers', run: require('./migrations/014_mgmt_amend_ref_numbers') },
+  { id: '015_mgmt_rejection', run: require('./migrations/015_mgmt_rejection') }
 ];
 
 async function waitForDb(retries = 30) {

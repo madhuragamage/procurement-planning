@@ -35,7 +35,9 @@ Database: `server/sql/schema.sql` is the version-1 baseline; the server applies 
    optional detail (required for Other), cost excl./incl. VAT, **funding** LECO (default) / GOSL / Foreign / Grant,
    required date, plan cycle and year, **one time or recurrent annually** with a yearly % increase, and optional
    **budget phasing** – the % of the value needed in the start year and up to two following years) and submits it.
-   Each sub unit files independently and sees only its own requests.
+   Each sub unit files independently and sees only its own requests. Reference numbers are
+   `<plan year>-<running number>-<department code>`, e.g. `2027-01-DD`, numbered from 01 each plan year across all
+   departments.
 2. **Authorise** – the department head authorises, returns (with comment) or rejects it. Once authorised (received by
    the procurement unit), the procurement unit and the head of its department can **amend** the request until the plan
    is submitted for approval; amendments are logged and carried into the plan item.
@@ -50,8 +52,12 @@ Database: `server/sql/schema.sql` is the version-1 baseline; the server applies 
    request also creates its repeats in each later year of the cycle (ref `…/R1`, `…/R2`), with the estimate escalated
    by the yearly % (compounded) and the dates moved on a year each; they are separate items that can be edited on
    their own, and removing the original removes them. The
-   procurement unit submits it; management approves or returns it with comments; an approved plan is
-   frozen.
+   procurement unit submits it; management approves it as submitted, **amends it and approves** (editing or
+   removing items while it is submitted – each amendment is logged, items are marked "amended by management", and the
+   approval and snapshot record the amendments), or returns it with comments; an approved plan is frozen. A
+   procurement management **removes** is **rejected by management** (with the reason) – it does not go back to the
+   procurement inbox. If required it can return: through a **plan revision** once the plan is approved, or by the
+   procurement unit **reinstating** it (with a reason) while the plan is still being prepared.
 5. **Revisions** – a frozen plan can only change through a bi-annual or urgent revision (add / modify /
    cancel). Management approval applies the changes atomically, bumps the plan version and stores a
    snapshot. Direct edits to a submitted/approved/frozen plan are rejected with HTTP 409.

@@ -12,7 +12,7 @@ const router = express.Router();
 
 const SELECT = `
   SELECT r.*, d.name AS department, dv.name AS division, su.name AS sub_unit, ${CATEGORY_LABEL} AS category, c.manual_type, bc.code AS budget_code, bc.description AS budget_code_desc,
-         u.name AS requested_by_name, a.name AS authorised_by_name, pi.id AS plan_item_id
+         u.name AS requested_by_name, a.name AS authorised_by_name, mr.name AS mgmt_rejected_by_name, pi.id AS plan_item_id
   FROM requests r
   JOIN departments d ON d.id = r.department_id
   LEFT JOIN divisions dv ON dv.id = d.division_id
@@ -21,6 +21,7 @@ const SELECT = `
   LEFT JOIN budget_codes bc ON bc.id = r.budget_code_id
   JOIN users u ON u.id = r.requested_by
   LEFT JOIN users a ON a.id = r.authorised_by
+  LEFT JOIN users mr ON mr.id = r.mgmt_rejected_by
   LEFT JOIN plan_items pi ON pi.request_id = r.id AND pi.recur_index = 0`;
 
 async function getRequest(id) {
@@ -119,7 +120,14 @@ router.get('/', wrap(async (req, res) => {
   const [plans] = await pool.query('SELECT fy, status FROM plans');
   const locked = new Set(plans.filter(p => !['planning', 'changes_requested'].includes(p.status)).map(p => p.fy));
   const amender = ['procurement', 'admin'].includes(req.user.role) || await isProcurementHead(req.user);
-  res.json(rows.map(r => ({ ...r, can_amend: amender && r.status === 'authorised' && !locked.has(r.plan_fy) })));
+  const planStatus = new Map(plans.map(p => [p.fy, p.status]));
+  const isProc = ['procurement', 'admin'].includes(req.user.role);
+  res.json(rows.map(r => ({
+    ...r, can_amend: amender && r.status === 'authorised' && !locked.has(r.plan_fy),
+    // Rejected by management: reinstated directly while the plan is being prepared, else through a plan revision.
+    resubmit: r.status === 'rejected' && r.mgmt_rejected_at && isProc
+      ? (['approved', 'frozen'].includes(planStatus.get(r.plan_fy)) ? 'revision' : planStatus.get(r.plan_fy) === 'submitted' ? 'wait' : 'reinstate') : null
+  })));
 }));
 
 router.get('/:id', wrap(async (req, res) => {
@@ -142,8 +150,12 @@ router.post('/', requireRole(...WRITERS), wrap(async (req, res) => {
       `INSERT INTO requests (ref_no, department_id, sub_unit_id, category_id, title, description, reason, reason_note, expense_type, budget_code_id, recurrence, annual_increase_pct, budget_phasing, tce_excl_vat_mn, vat_pct, funding_source, funding_agency, priority, plan_fy, year_offset, required_date, requested_by)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [tmp, f.department_id, subUnitId, f.category_id, f.title, f.description, f.reason, f.reason_note, f.expense_type, f.budget_code_id, f.recurrence, f.annual_increase_pct, f.budget_phasing, f.tce_excl_vat_mn, f.vat_pct, f.funding_source, f.funding_agency, f.priority, f.plan_fy, f.year_offset, f.required_date, req.user.id]);
+    // Reference: <plan year>-<running number>-<department>, e.g. 2027-01-DD; numbering restarts at 01 each
+    // plan year and runs across all departments. The year's numbers are locked so two requests can't share one.
     const [[dept]] = await conn.query('SELECT code FROM departments WHERE id = ?', [f.department_id]);
-    const ref = `${dept.code}-${f.plan_fy}-${String(r.insertId).padStart(4, '0')}`;
+    const [taken] = await conn.query('SELECT ref_no FROM requests WHERE ref_no LIKE ? FOR UPDATE', [`${f.plan_fy}-%`]);
+    const next = taken.reduce((m, x) => Math.max(m, Number(x.ref_no.split('-')[1]) || 0), 0) + 1;
+    const ref = `${f.plan_fy}-${String(next).padStart(2, '0')}-${dept.code}`;
     await conn.query('UPDATE requests SET ref_no = ? WHERE id = ?', [ref, r.insertId]);
     await audit(conn, 'request', r.insertId, 'create', req.user.id, null);
     return r.insertId;
@@ -207,6 +219,22 @@ router.post('/:id/submit', requireRole(...WRITERS), wrap(async (req, res) => {
   if (!r.required_date) throw new HttpError(400, 'Enter the tentative required date before submitting.');
   await pool.query("UPDATE requests SET status = 'submitted', review_comment = NULL WHERE id = ?", [r.id]);
   await audit(null, 'request', r.id, 'submit', req.user.id, null);
+  res.json(await getRequest(r.id));
+}));
+
+// The procurement unit brings back a request management removed, while that cycle's plan is still being
+// prepared (planning / returned for changes). Once the plan is approved it can only come back by revision.
+router.post('/:id/reinstate', requireRole('procurement', 'admin'), wrap(async (req, res) => {
+  const r = await load(req);
+  if (r.status !== 'rejected' || !r.mgmt_rejected_at) throw new HttpError(409, 'Only a request rejected by management can be reinstated.');
+  const reason = optString(req.body.reason, 500);
+  if (!reason) throw new HttpError(400, 'Give the reason for bringing this request back.');
+  const [[plan]] = await pool.query('SELECT status FROM plans WHERE fy = ?', [r.plan_fy]);
+  if (plan && ['approved', 'frozen'].includes(plan.status)) throw new HttpError(409, `The ${r.plan_fy} plan is ${plan.status}; add this request back through a plan revision (Revisions → add item).`);
+  if (plan && plan.status === 'submitted') throw new HttpError(409, `The ${r.plan_fy} plan is with management for approval; wait for its decision.`);
+  await pool.query("UPDATE requests SET status = 'authorised', mgmt_rejected_at = NULL, mgmt_rejected_by = NULL, review_comment = CONCAT(COALESCE(review_comment, ''), ?) WHERE id = ?",
+    [` | reinstated by the procurement unit: ${reason}`, r.id]);
+  await audit(null, 'request', r.id, 'reinstate', req.user.id, reason);
   res.json(await getRequest(r.id));
 }));
 

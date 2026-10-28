@@ -50,9 +50,14 @@ async function ensurePlan(fy, conn) {
 
 // Plan contents may only be edited directly while planning / after management returned it.
 // After that (submitted, approved, frozen) the only route is a revision.
-async function assertPlanEditable(fy, conn) {
+// Management may amend the plan only while it is submitted for its approval (then approve or return it).
+async function assertPlanEditable(fy, conn, user) {
   const plan = await getPlan(fy, conn);
   const status = plan ? plan.status : 'planning';
+  if (user && user.role === 'management') {
+    if (status === 'submitted') return plan;
+    throw new HttpError(409, `Management can amend the ${fy} plan only while it is submitted for approval (it is ${status.replace('_', ' ')}).`);
+  }
   if (EDITABLE_STATES.includes(status)) return plan;
   const why = status === 'submitted' ? 'is awaiting management approval'
     : status === 'approved' ? 'has been approved'
@@ -123,7 +128,14 @@ async function snapshotPlan(conn, fy, label, userId) {
 async function createItem(conn, requestId, body, userId, limits, { viaRevision = false } = {}) {
   const [[r]] = await conn.query('SELECT r.*, c.manual_type FROM requests r JOIN categories c ON c.id = r.category_id WHERE r.id = ? FOR UPDATE', [requestId]);
   if (!r) throw new HttpError(404, 'Request not found.');
-  if (r.status !== 'authorised') throw new HttpError(409, `Request ${r.ref_no} is not authorised by its department head.`);
+  // A request management removed from the plan comes back only through an approved plan revision.
+  const mgmtRejected = r.status === 'rejected' && !!r.mgmt_rejected_at;
+  if (r.status !== 'authorised' && !(viaRevision && mgmtRejected)) {
+    throw new HttpError(409, mgmtRejected ? `Request ${r.ref_no} was rejected by management; it can return to the plan only through a plan revision.` : `Request ${r.ref_no} is not authorised by its department head.`);
+  }
+  if (mgmtRejected) {
+    await conn.query("UPDATE requests SET status = 'authorised', mgmt_rejected_at = NULL, mgmt_rejected_by = NULL, review_comment = CONCAT(COALESCE(review_comment, ''), ' | returned to the plan by revision') WHERE id = ?", [r.id]);
+  }
   const [[dupe]] = await conn.query('SELECT id FROM plan_items WHERE request_id = ?', [requestId]);
   if (dupe) throw new HttpError(409, `Request ${r.ref_no} is already in a plan.`);
   await ensurePlan(r.plan_fy, conn);

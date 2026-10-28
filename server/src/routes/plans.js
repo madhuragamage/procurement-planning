@@ -26,6 +26,19 @@ function incompleteItems(items) {
     .map(it => ({ id: it.id, ref_no: it.ref_no, title: it.title, missing: [!it.method && 'method', !it.procurement_start && 'procurement start', !it.expected_delivery && 'expected delivery'].filter(Boolean) }));
 }
 
+// Management's amendments to a submitted plan (since it was last submitted): item changes and removals.
+async function amendments(fy, conn) {
+  const db = conn || pool;
+  const [[plan]] = await db.query('SELECT submitted_at FROM plans WHERE fy = ?', [fy]);
+  if (!plan || !plan.submitted_at) return [];
+  const [rows] = await db.query(
+    `SELECT a.id, a.action, a.comment, a.at, a.entity_id, u.name AS user FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+     WHERE a.at >= ? AND ((a.action = 'mgmt-remove' AND a.entity = 'plan' AND a.entity_id = ?)
+       OR (a.action = 'mgmt-amend' AND a.entity = 'plan_item' AND a.entity_id IN (SELECT CAST(id AS CHAR) FROM plan_items WHERE plan_fy = ?)))
+     ORDER BY a.id`, [plan.submitted_at, String(fy), fy]);
+  return rows;
+}
+
 router.get('/', wrap(async (req, res) => {
   const [rows] = await pool.query(
     `SELECT p.*, (SELECT COUNT(*) FROM plan_items i WHERE i.plan_fy = p.fy) AS item_count FROM plans p ORDER BY p.fy DESC`);
@@ -61,7 +74,8 @@ router.get('/:fy', wrap(async (req, res) => {
       }
     }
   }
-  res.json({ plan, summary: summarise(items), incomplete: incompleteItems(items), unplanned_authorised: pending.n, pending_revisions: revs.n, budget_warnings: budgetWarnings, item_count: items.length });
+  res.json({ plan, summary: summarise(items), incomplete: incompleteItems(items), unplanned_authorised: pending.n, pending_revisions: revs.n, budget_warnings: budgetWarnings, item_count: items.length,
+    amendments: plan.status === 'submitted' ? await amendments(fy) : [] });
 }));
 
 router.post('/:fy/submit', requireRole('procurement', 'admin'), wrap(async (req, res) => {
@@ -98,10 +112,14 @@ router.post('/:fy/approve', requireRole('management'), wrap(async (req, res) => 
   await tx(async conn => {
     const [[plan]] = await conn.query('SELECT * FROM plans WHERE fy = ? FOR UPDATE', [fy]);
     if (!plan || plan.status !== 'submitted') throw new HttpError(409, 'Only a submitted plan can be approved.');
+    // Approved as submitted, or with management's own amendments (recorded in the snapshot label and audit).
+    const amended = await amendments(fy, conn);
+    const comment = optString(req.body.comment, 1000);
+    const note = amended.length ? `approved with ${amended.length} management amendment(s)` : null;
     await conn.query("UPDATE plans SET status = 'approved', version = version + 1, approved_by = ?, approved_at = NOW(), review_comment = ? WHERE fy = ?",
-      [req.user.id, optString(req.body.comment, 1000), fy]);
-    await lib.snapshotPlan(conn, fy, 'Approved by management', req.user.id);
-    await audit(conn, 'plan', fy, 'approve', req.user.id, optString(req.body.comment, 1000));
+      [req.user.id, [note, comment].filter(Boolean).join(' — ') || null, fy]);
+    await lib.snapshotPlan(conn, fy, amended.length ? `Approved by management with ${amended.length} amendment(s)` : 'Approved by management', req.user.id);
+    await audit(conn, 'plan', fy, 'approve', req.user.id, [note && `${note}: ${amended.map(a => a.comment).join(' | ')}`, comment].filter(Boolean).join(' — ') || null);
   });
   res.json({ ok: true });
 }));

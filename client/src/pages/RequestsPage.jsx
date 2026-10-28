@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useApp } from '../context/AppContext.jsx';
@@ -257,9 +258,17 @@ export default function RequestsPage() {
                     <td>{r.reason}{r.reason_note ? ': ' + r.reason_note : ''}</td>
                     <td style={{ textAlign: 'right' }}>{fmt(inclVat(r.tce_excl_vat_mn, r.vat_pct))}</td><td>{FUNDING_LABEL[r.funding_source]}</td>
                     <td>{r.plan_fy}+{r.year_offset}</td><td>{r.required_date}</td>
-                    <td><Status value={r.status} />{r.plan_item_id ? <span className="pill ok" style={{ marginLeft: 4 }}>in plan</span> : null}</td>
+                    <td><Status value={r.status} />{r.plan_item_id ? <span className="pill ok" style={{ marginLeft: 4 }}>in plan</span> : null}{r.mgmt_rejected_at ? <span className="pill bad" style={{ marginLeft: 4 }} title={r.review_comment || ''}>by management</span> : null}</td>
                     <td style={{ display: 'flex', gap: 6 }}>
                       {['draft', 'returned'].includes(r.status) && canWrite && <button className="mini plain" onClick={() => setForm(r)}>edit</button>}
+                      {r.resubmit === 'reinstate' && <button className="mini plain" disabled={busy} title="Bring it back into the plan being prepared" onClick={async () => {
+                        const reason = window.prompt(`Reinstate ${r.ref_no}? It returns to the procurement inbox as authorised.
+
+Reason:`, '');
+                        if (reason) { await run(() => api.post(`/requests/${r.id}/reinstate`, { reason }), `${r.ref_no} reinstated — back in the procurement inbox.`); load(); }
+                      }}>reinstate</button>}
+                      {r.resubmit === 'revision' && <Link className="mini plain" style={{ padding: '4px 9px', borderRadius: 6, border: '1px solid var(--line)', fontSize: 11, textDecoration: 'none' }} to="/app/revisions" title="The plan is approved: add it back through a plan revision">resubmit by revision</Link>}
+                      {r.resubmit === 'wait' && <span className="hint" style={{ margin: 0 }}>plan with management</span>}
                       {r.can_amend && <button className="mini plain" title="Amend before the plan is submitted for approval" onClick={() => { setForm(r); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>amend</button>}
                       {['draft', 'returned'].includes(r.status) && canWrite && <button className="mini plain" disabled={busy} onClick={async () => { await run(() => api.post(`/requests/${r.id}/submit`), `${r.ref_no} submitted to your department head.`); load(); }}>submit</button>}
                       {r.status === 'draft' && canWrite && <button className="mini" disabled={busy} onClick={async () => { if (confirm(`Delete draft ${r.ref_no}?`)) { await run(() => api.del('/requests/' + r.id)); load(); } }}>delete</button>}
@@ -268,7 +277,7 @@ export default function RequestsPage() {
                   {openId === r.id && detail && (
                     <tr><td colSpan={12} style={{ background: 'var(--panel-2)' }}>
                       {detail.description && <p style={{ margin: '4px 0', fontFamily: 'var(--body)' }}>{detail.description}</p>}
-                      {r.review_comment && <p className="hint" style={{ margin: '4px 0' }}>Reviewer comment: {r.review_comment}</p>}
+                      {r.review_comment && <p className="hint" style={{ margin: '4px 0' }}>{r.mgmt_rejected_at ? <b style={{ color: 'var(--bad)' }}>Rejected by management{r.mgmt_rejected_by_name ? ` (${r.mgmt_rejected_by_name}, ${String(r.mgmt_rejected_at).slice(0, 10)})` : ''}: </b> : 'Reviewer comment: '}{r.review_comment}</p>}
                       <div className="hint" style={{ margin: '4px 0' }}>Requested by {detail.requested_by_name}{detail.authorised_by_name ? ` · authorised by ${detail.authorised_by_name}` : ''} · {FUNDING_LABEL[detail.funding_source]}{detail.funding_agency ? ` (${detail.funding_agency})` : ''} · priority {PRIORITY[detail.priority]} · {EXPENSE_LABEL[detail.expense_type]}{detail.budget_code ? ` — budget code ${detail.budget_code} ${detail.budget_code_desc}` : ""} · {recurLabel(detail)}{phasingLabel(detail) ? ` · budget phasing ${phasingLabel(detail)}` : ''}</div>
                       <div className="hint" style={{ margin: '4px 0' }}>{detail.history.map(h => `${h.at.slice(0, 16).replace('T', ' ')} ${h.action} by ${h.user || '-'}${h.comment ? ' — ' + h.comment : ''}`).join('  |  ')}</div>
                     </td></tr>

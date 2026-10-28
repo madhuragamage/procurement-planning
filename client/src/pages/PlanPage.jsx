@@ -31,6 +31,9 @@ function FullPlanPage() {
   if (!info) return <div className="loading"><span className="spinner"></span> Loading…</div>;
   const { plan } = info;
   const canEdit = ['procurement', 'admin'].includes(user.role) && ['planning', 'changes_requested'].includes(plan.status);
+  // Management may amend a submitted plan (edit / remove items) and then approve it.
+  const mgmtAmend = user.role === 'management' && plan.status === 'submitted';
+  const amendCount = (info.amendments || []).length;
   const isProc = ['procurement', 'admin'].includes(user.role);
   const act = (path, msg) => async comment => { await run(() => api.post(`/plans/${fy}/${path}`, { comment }), msg); load(); };
   const tracking = ['approved', 'frozen'].includes(plan.status);
@@ -88,11 +91,20 @@ function FullPlanPage() {
             : <div className="hint">The procurement unit submits the plan for approval.</div>
         ) : plan.status === 'submitted' ? (
           user.role === 'management' ? (
-            <CommentAction busy={busy} actions={[
-              { label: 'Approve plan', primary: true, onClick: act('approve', 'Plan approved.') },
-              { label: 'Return with changes', onClick: act('return', 'Plan returned to procurement.') }
-            ]} />
-          ) : <div className="hint">Awaiting management approval. Management can approve it or return it with change comments.</div>
+            <>
+              <p className="hint" style={{ marginTop: 0 }}>Approve the plan as submitted, <b>amend items yourself</b> (edit or remove them in the lists below) and then approve, or return it to procurement with your comments.</p>
+              {amendCount > 0 && (
+                <div className="hintbox" style={{ marginBottom: 10 }}>
+                  <b>Your amendments ({amendCount})</b>
+                  <ul className="warnlist" style={{ color: 'var(--text)' }}>{info.amendments.map(a => <li key={a.id}>{a.action === 'mgmt-remove' ? 'Removed: ' : 'Amended: '}{a.comment} <span className="hint" style={{ margin: 0 }}>({a.user}, {String(a.at).slice(0, 16).replace('T', ' ')})</span></li>)}</ul>
+                </div>
+              )}
+              <CommentAction busy={busy} actions={[
+                { label: amendCount ? `Approve with ${amendCount} amendment${amendCount > 1 ? 's' : ''}` : 'Approve plan', primary: true, onClick: act('approve', amendCount ? 'Plan approved with your amendments.' : 'Plan approved.') },
+                { label: 'Return with changes', onClick: act('return', 'Plan returned to procurement.') }
+              ]} />
+            </>
+          ) : <div className="hint">Awaiting management approval. Management can approve it as submitted, amend it and approve, or return it with change comments.{amendCount ? ` Management has made ${amendCount} amendment(s) so far.` : ''}</div>
         ) : plan.status === 'approved' ? (
           ['management', 'procurement', 'admin'].includes(user.role)
             ? <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><button className="primary" disabled={busy} onClick={async () => { await run(() => api.post(`/plans/${fy}/freeze`), 'Plan frozen.'); load(); }}>Freeze plan</button><span className="hint" style={{ margin: 0 }}>Freezing locks item edits; only approved revisions can change the plan.</span></div>
@@ -115,15 +127,24 @@ function FullPlanPage() {
                   <thead><tr><th>Ref</th><th>Description</th><th>Department</th><th>Category</th><th>Type</th><th>Method</th><th>Committee</th><th style={{ textAlign: 'right' }}>Incl. VAT (Mn)</th><th>Start</th><th>Delivery</th><th>Checks</th><th>Execution</th><th></th></tr></thead>
                   <tbody>{list.map(it => (
                     <tr key={it.id}>
-                      <td>{it.bid_no ? <><b>{it.bid_no}</b><div className="hint" style={{ margin: 0 }}>{it.ref_no}</div></> : it.ref_no}</td><td className="wrap">{it.title}<RecurPill it={it} /></td><td>{it.department}</td><td>{it.category}</td><td>{it.expense_type}</td>
+                      <td>{it.bid_no ? <><b>{it.bid_no}</b><div className="hint" style={{ margin: 0 }}>{it.ref_no}</div></> : it.ref_no}</td><td className="wrap">{it.title}<RecurPill it={it} />{it.mgmt_amended_at && <span className="pill warn" style={{ marginLeft: 6 }} title={`Amended by management on ${String(it.mgmt_amended_at).slice(0, 10)}`}>amended by management</span>}</td><td>{it.department}</td><td>{it.category}</td><td>{it.expense_type}</td>
                       <td>{it.method || <span className="pill bad">none</span>}</td><td>{it.committee_level}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(it.tce_incl_vat_mn)}</td><td>{it.procurement_start}</td><td>{it.expected_delivery}</td>
                       <td title={it.checks.warnings.join('\n')}>{it.checks.warnings.length ? <span className="pill warn">{it.checks.warnings.length} warning{it.checks.warnings.length > 1 ? 's' : ''}</span> : <span className="pill ok">ok</span>}</td>
                       <td>{tracking ? <><Status value={it.exec_status} />{isProc && it.status === 'planned' && !['accepted', 'requested'].includes(it.exec_status) && <button className="mini plain" style={{ marginLeft: 6 }} disabled={busy} onClick={() => startNow(it)}>start</button>}</> : ''}</td>
                       <td style={{ display: 'flex', gap: 6 }}>
-                        {canEdit ? <>
-                          <button className="mini plain" onClick={() => { setEditing(it); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>edit</button>
-                          <button className="mini" disabled={busy} onClick={async () => { if (confirm(`Remove ${it.ref_no} from the plan?${it.recurrence === 'recurrent' && it.recur_index === 0 ? ' Its recurrent repeats in later years are removed too.' : ''} The request stays authorised.`)) { await run(() => api.del('/plan-items/' + it.id)); load(); } }}>remove</button>
+                        {canEdit || mgmtAmend ? <>
+                          <button className="mini plain" onClick={() => { setEditing(it); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>{mgmtAmend ? 'amend' : 'edit'}</button>
+                          <button className="mini" disabled={busy} onClick={async () => {
+                            const msg = mgmtAmend
+                              ? (it.recur_index > 0 ? `Remove this repeat (${it.ref_no}) from the plan? The original procurement stays in the plan.` : `Remove ${it.ref_no} from the plan? It will be REJECTED by management${it.recurrence === 'recurrent' ? ' (with its recurrent repeats)' : ''}; it can come back only through a plan revision if required.`)
+                              : `Remove ${it.ref_no} from the plan?${it.recurrence === 'recurrent' && it.recur_index === 0 ? ' Its recurrent repeats in later years are removed too.' : ''} The request stays authorised and returns to the procurement inbox.`;
+                            if (mgmtAmend) {
+                              const reason = window.prompt(`${msg}\n\nReason for removing it (recorded with your amendments):`, '');
+                              if (reason === null) return;
+                              await run(() => api.del('/plan-items/' + it.id, { reason }), it.recur_index > 0 ? `${it.ref_no} removed.` : `${it.ref_no} removed and rejected by management.`); load();
+                            } else if (confirm(msg)) { await run(() => api.del('/plan-items/' + it.id)); load(); }
+                          }}>remove</button>
                         </> : <span className="hint" style={{ margin: 0 }}>locked</span>}
                       </td>
                     </tr>
